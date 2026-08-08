@@ -1,0 +1,37 @@
+name: Aplicar alertas GDP 2024
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  aplicar-alertas:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Aplicar parche de validaciones GDP-2024
+        run: python tools/apply_gdp_2024_limits.py
+
+      - name: Verificar sintaxis de app.py
+        run: python -m py_compile app.py
+
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Aplicar alertas normativas GDP-2024"
+            git push
+          fi
