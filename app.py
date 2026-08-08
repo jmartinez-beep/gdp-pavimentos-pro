@@ -18,7 +18,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="GDP Pavimentos Pro v1.1 Web Ready",
+    page_title="GDP Pavimentos Pro v1.1.2 Web Ready",
     page_icon="🛣️",
     layout="wide",
 )
@@ -756,6 +756,73 @@ def performance_plot(df: pd.DataFrame, value_col: str, title: str, y_title: str,
     return fig
 
 
+
+def gdp_scope_alerts(active_tomo: str, tpd_total: float, heavy_pct: float, cbr: float,
+                     esal: float, years: int) -> list[tuple[str, str]]:
+    """Alertas de alcance basadas en GDP-2024 Tomos I y II.
+
+    Devuelve pares (nivel, mensaje), donde nivel es success/info/warning/error.
+    Estas verificaciones ayudan a evitar el uso del Tomo II fuera de su alcance y
+    orientan la confiabilidad del Tomo I; no sustituyen el criterio profesional.
+    """
+    alerts: list[tuple[str, str]] = []
+
+    if active_tomo == "Tomo II":
+        # GDP-2024 Tomo II: guía simplificada de bajo volumen.
+        if tpd_total > 3500:
+            alerts.append(("error", f"Tomo II fuera de alcance: TPD = {tpd_total:,.0f} veh/día supera 3 500 veh/día. Utilice Tomo I o realice un diseño específico."))
+        elif tpd_total <= 0:
+            alerts.append(("error", "Tomo II: el TPD debe ser mayor que cero."))
+        else:
+            alerts.append(("success", f"TPD dentro del rango de aplicación del Tomo II: {tpd_total:,.0f} veh/día."))
+
+        if heavy_pct > 15.0:
+            alerts.append(("error", f"Tomo II fuera de alcance: vehículos pesados = {heavy_pct:.2f}% supera el máximo de 15%. Utilice Tomo I o diseño específico."))
+        else:
+            alerts.append(("success", f"Porcentaje de vehículos pesados dentro del límite del Tomo II: {heavy_pct:.2f}% ≤ 15%."))
+
+        if cbr < 3.0:
+            alerts.append(("error", f"Tomo II: CBR = {cbr:.2f}% es menor que 3%. La subrasante requiere mejoramiento, estabilización o sustitución antes de seleccionar una estructura del catálogo."))
+        else:
+            alerts.append(("success", f"CBR de subrasante compatible con el alcance simplificado: {cbr:.2f}% ≥ 3%."))
+
+        if esal > 1_500_000:
+            alerts.append(("error", f"Tomo II fuera de alcance: ESAL de diseño = {esal:,.0f} supera 1,5 millones. Se requiere diseño específico/Tomo I."))
+        else:
+            alerts.append(("success", f"ESAL dentro del alcance simplificado: {esal:,.0f} ≤ 1,5 millones."))
+
+        if int(years) not in (6, 8, 10, 12):
+            alerts.append(("warning", f"Tomo II: el catálogo GDP-2024 está tabulado directamente para períodos de 6, 8, 10 y 12 años. El período ingresado ({int(years)} años) no tiene selección tabulada directa; verifique o adopte un diseño específico."))
+        else:
+            alerts.append(("success", f"Período de diseño tabulado en el Tomo II: {int(years)} años."))
+
+    else:  # Tomo I
+        # Nivel jerárquico y confiabilidad típica según ESAL de diseño.
+        if esal < 3_000_000:
+            cat, conf = "Categoría 3", 75
+            crack, rut = 35, 16
+        elif esal <= 25_000_000:
+            cat, conf = "Categoría 2", 85
+            crack, rut = 20, 12
+        else:
+            cat, conf = "Categoría 1", 95
+            crack, rut = 10, 10
+        alerts.append(("info", f"Tomo I: {cat} por nivel de ESAL. Confiabilidad típica recomendada: {conf}%."))
+        alerts.append(("info", f"Criterios de desempeño de referencia al final del período: área agrietada ≤ {crack}% y ahuellamiento total ≤ {rut} mm."))
+
+        if int(years) < 5 or int(years) > 40:
+            alerts.append(("warning", "Tomo I: revise el período de análisis respecto al tipo funcional de la ruta."))
+
+    return alerts
+
+
+def render_gdp_scope_alerts(active_tomo: str, tpd_total: float, heavy_pct: float,
+                            cbr: float, esal: float, years: int) -> None:
+    st.markdown("#### Verificación automática de alcance — GDP-2024")
+    for level, msg in gdp_scope_alerts(active_tomo, tpd_total, heavy_pct, cbr, esal, years):
+        getattr(st, level)(msg)
+    st.caption("Control de alcance incorporado con base en GDP-2024. Las alertas no sustituyen la revisión integral de la guía ni el criterio del profesional responsable.")
+
 def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, esal: float, cbr: float, pavement_temp: float, drainage: dict) -> pd.DataFrame:
     """Matriz trazable de validación. No reemplaza la revisión profesional."""
     checks = []
@@ -765,6 +832,9 @@ def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, es
     add("Catálogo", "Coincidencia exacta tránsito-subrasante", bool(exact_match), "Alta", f"Código {selected.get('Código','—')}")
     add("Tránsito", "ESAL mayor que cero", esal > 0, "Alta", f"{esal:,.0f} ESAL")
     add("Subrasante", "CBR definido", cbr > 0, "Alta", f"CBR {cbr:.2f}%")
+    if active_tomo == "Tomo II":
+        add("Alcance Tomo II", "ESAL ≤ 1,5 millones", esal <= 1_500_000, "Alta", f"{esal:,.0f} ESAL")
+        add("Alcance Tomo II", "CBR ≥ 3%", cbr >= 3.0, "Alta", f"CBR {cbr:.2f}%")
     add("Clima", "Temperatura de pavimento revisada", pavement_temp < 55, "Media", f"{pavement_temp:.1f} °C")
     drain_ok = bool(drainage.get("side_ditches", False)) and bool(drainage.get("outlets", False))
     add("Drenaje", "Conducción y descarga documentadas", drain_ok, "Alta", drainage.get("quality","Sin definir"))
@@ -996,7 +1066,7 @@ def _restore_session_state(saved):
 
 
 def _auth_screen():
-    st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.1 Piloto Cloud</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.2 Piloto Cloud</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">Acceso multiusuario · proyectos persistentes · preparado para despliegue web.</div>', unsafe_allow_html=True)
     left, center, right = st.columns([1, 1.2, 1])
     with center:
@@ -1046,7 +1116,7 @@ if "catalog" not in st.session_state:
 if "vehicles" not in st.session_state:
     st.session_state.vehicles = VEHICLE_DEFAULTS.copy()
 
-st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.1 Piloto Cloud</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.2 Piloto Cloud</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtle">Diseño flexible, 3D y gestión multiusuario · piloto gratuito para validación pública.</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -1252,6 +1322,8 @@ with p3:
     x1.metric("CBR de diseño", f"{cbr_design:.2f}%")
     x2.metric("Rango de subrasante", sclass)
     x3.metric("Módulo resiliente estimado", f"{mr:.2f} MPa")
+
+    render_gdp_scope_alerts(st.session_state.active_tomo, tpd_total, heavy_pct, cbr_design, esal, int(years))
 
     chart_df = cbr_series.copy()
     chart_df.index = [f"Muestra {i+1}" for i in range(len(chart_df))]
