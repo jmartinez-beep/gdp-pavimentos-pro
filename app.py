@@ -10,6 +10,8 @@ from typing import Dict, List
 import os
 
 from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
+from gdp_tomo2_adapter import alternatives_for_app, selected_trace
+from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,7 +20,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="GDP Pavimentos Pro v1.1.2 Web Ready",
+    page_title="GDP Pavimentos Pro v1.1.3 Web Ready",
     page_icon="🛣️",
     layout="wide",
 )
@@ -1066,7 +1068,7 @@ def _restore_session_state(saved):
 
 
 def _auth_screen():
-    st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.2 Piloto Cloud</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">Acceso multiusuario · proyectos persistentes · preparado para despliegue web.</div>', unsafe_allow_html=True)
     left, center, right = st.columns([1, 1.2, 1])
     with center:
@@ -1116,7 +1118,7 @@ if "catalog" not in st.session_state:
 if "vehicles" not in st.session_state:
     st.session_state.vehicles = VEHICLE_DEFAULTS.copy()
 
-st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.2 Piloto Cloud</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud</div>', unsafe_allow_html=True)
 st.markdown('<div class="subtle">Diseño flexible, 3D y gestión multiusuario · piloto gratuito para validación pública.</div>', unsafe_allow_html=True)
 
 with st.sidebar:
@@ -1166,25 +1168,15 @@ with st.sidebar:
     st.markdown("### Calidad visual 3D")
     st.selectbox("Nivel de detalle", ["Media", "Alta", "Ultra"], index=1, key="render_quality", help="Ultra mejora la textura, pero requiere más capacidad gráfica.")
     st.toggle("Rotación automática al abrir", value=True, key="auto_rotate_3d", help="El modelo gira lentamente. También puede pausarlo o reanudarlo dentro del visor 3D.")
-    st.markdown("### Configuración avanzada")
-    st.info("El catálogo puede ampliarse cargando las tablas completas del GDP Tomo I y II.")
-    uploaded = st.file_uploader("Cargar catálogo CSV", type=["csv"])
-    if uploaded is not None:
-        try:
-            candidate = pd.read_csv(uploaded)
-            required = set(CATALOG_DEFAULT.columns)
-            if required.issubset(candidate.columns):
-                st.session_state.catalog = candidate[list(CATALOG_DEFAULT.columns)].copy()
-                st.success("Catálogo cargado.")
-            else:
-                st.error(f"Faltan columnas: {sorted(required - set(candidate.columns))}")
-        except Exception as exc:
-            st.error(f"No se pudo leer el archivo: {exc}")
+    st.markdown("### Configuración normativa")
+    st.success("Tomo II usa el catálogo oficial GDP-2024 integrado y trazable. No requiere cargar CSV externos.")
+    st.caption("Las alternativas se seleccionan desde las Tablas 301-01 a 301-21 según TPD, porcentaje de pesados, CBR y período de diseño. Los períodos no tabulados no se interpolan.")
     st.download_button(
-        "Descargar plantilla de catálogo",
+        "Descargar catálogo histórico (solo referencia)",
         data=CATALOG_DEFAULT.to_csv(index=False).encode("utf-8-sig"),
-        file_name="plantilla_catalogo_gdp.csv",
+        file_name="catalogo_historico_no_normativo.csv",
         mime="text/csv",
+        help="Archivo heredado conservado únicamente para compatibilidad y referencia; no alimenta la selección oficial del Tomo II.",
     )
 
 # Selector principal de metodología
@@ -1362,105 +1354,122 @@ with pclima:
 
 with p4:
     if st.session_state.active_tomo == "Tomo II":
-        st.subheader("Catálogo de estructuras — Tomo II")
-        st.caption("Modo simplificado para seleccionar alternativas de bajo volumen según tránsito y subrasante.")
-    else:
-        st.subheader("Evaluación mecanístico-empírica — Tomo I")
-        st.info("Vista preliminar del Tomo I. En esta versión se mantienen los datos de tránsito, subrasante y geometría para evaluar una estructura propuesta. Los modelos completos de desempeño se incorporarán progresivamente.")
-    catalog = st.session_state.catalog.copy()
+        st.subheader("Catálogo oficial de estructuras — GDP-2024 Tomo II")
+        st.caption("Selección directa desde las Tablas 301-01 a 301-21, sin interpolación y con trazabilidad por resultado.")
 
-    filtered = catalog[(catalog["Tránsito"] == tclass) & (catalog["Subrasante"] == sclass)]
-    exact_match = not filtered.empty
-
-    if exact_match:
-        options = filtered.copy()
-        st.success(f"Se encontraron {len(options)} alternativa(s) para tránsito {tclass} y subrasante {sclass}.")
-    else:
-        # En la versión preliminar el catálogo aún no contiene todas las combinaciones.
-        # Se muestran alternativas demostrativas sin presentarlas como recomendación normativa.
-        options = catalog[catalog["Subrasante"] == sclass].copy()
-        if options.empty:
-            options = catalog.copy()
-        st.error(
-            f"El tránsito calculado es {tclass}, pero el catálogo preliminar todavía no contiene esa combinación. "
-            "Las alternativas mostradas abajo son demostrativas y no constituyen una recomendación oficial del GDP."
+        options, tomo2_result = alternatives_for_app(
+            tpd=float(tpd_total),
+            heavy_pct=float(heavy_pct),
+            cbr=float(cbr_design),
+            period=int(years),
         )
-
-    st.markdown("### Resumen de entrada")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Tránsito de diseño", tclass)
-    r2.metric("ESAL de diseño", f"{esal:,.0f}")
-    r3.metric("Subrasante", f"{sclass} — CBR {cbr_design:.1f}%")
-    r4.metric("Periodo", f"{int(years)} años")
-
-    st.markdown("#### Estado climático del diseño")
-    for level,msg in climate_checks:
-        if level == "error": st.error(msg)
-        elif level == "warning": st.warning(msg)
-        else: st.success(msg)
-
-    if not options.empty:
-        label_map = {}
-        for _, row in options.iterrows():
-            esp = float(row["Carpeta_cm"]) + float(row["Base_cm"]) + float(row["Subbase_cm"])
-            label = f"{row['Código']} — {row['Superficie']} — {esp:.0f} cm totales"
-            label_map[label] = str(row["Código"])
-
-        selected_label = st.selectbox("Seleccione una alternativa para visualizar", list(label_map.keys()))
-        selected_code = label_map[selected_label]
-        selected_row = options[options["Código"].astype(str) == selected_code].iloc[0].to_dict()
-        st.session_state.selected_row = selected_row
+        st.session_state.tomo2_options = options.copy()
+        st.session_state.tomo2_result = tomo2_result
+        exact_match = tomo2_result.get("status") == "ok" and not options.empty
         st.session_state.exact_match = exact_match
-        total_thickness = float(selected_row["Carpeta_cm"]) + float(selected_row["Base_cm"]) + float(selected_row["Subbase_cm"])
-        st.session_state.total_thickness = total_thickness
 
-        st.markdown("### Paquete estructural seleccionado")
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Código", selected_row["Código"])
-        k2.metric("Tipo de superficie", selected_row["Superficie"])
-        k3.metric("Espesor estructural", f"{total_thickness:.0f} cm")
+        st.markdown("### Resumen de entrada normativa")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("TPD", f"{tpd_total:,.0f} veh/día")
+        r2.metric("Pesados", f"{heavy_pct:.2f}%")
+        r3.metric("CBR", f"{cbr_design:.2f}%")
+        r4.metric("Periodo", f"{int(years)} años")
 
-        left, right = st.columns([0.9, 2.1], gap="large")
-        with left:
-            st.markdown("#### Capas")
-            if float(selected_row["Carpeta_cm"]) > 0:
-                st.markdown(f'<div class="layer">Carpeta asfáltica<br><b>{float(selected_row["Carpeta_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="layer">{selected_row["Superficie"]}<br><b>Capa superficial</b></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="layer">Base<br><b>{float(selected_row["Base_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="layer">Subbase<br><b>{float(selected_row["Subbase_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="layer">Subrasante {sclass}<br><b>CBR {cbr_design:.2f}%</b></div>', unsafe_allow_html=True)
-            exploded_view = st.toggle("Vista explotada 3D", value=True, help="Separa las capas para identificarlas con mayor facilidad.")
-            st.caption("Use el mouse para girar, acercar y desplazar el modelo.")
+        criteria = tomo2_result.get("criteria", [])
+        if criteria:
+            cdf = pd.DataFrame(criteria)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
 
-        with right:
-            st.markdown("#### Modelo 3D interactivo")
-            fig_3d = pavement_3d_figure(selected_row, sclass, cbr_design, exploded_view)
-            render_rotating_3d(fig_3d, key="structure_view", height=700, auto_rotate=st.session_state.get("auto_rotate_3d", True))
+        status = tomo2_result.get("status")
+        if status == "fuera_alcance":
+            st.error("La combinación ingresada está fuera del alcance directo del catálogo Tomo II. No se emite ninguna alternativa normativa.")
+        elif status == "sin_alternativa":
+            st.warning("La combinación está dentro del alcance general, pero la celda correspondiente no asigna una alternativa estructural. Revise la tabla y el criterio indicado.")
+        elif status == "ok":
+            st.success(f"Se encontraron {len(options)} alternativa(s) oficiales para la combinación ingresada.")
 
-        with st.expander("Ver datos técnicos de la alternativa"):
-            technical = pd.DataFrame([
-                ["Tránsito del catálogo", selected_row["Tránsito"]],
-                ["Subrasante del catálogo", selected_row["Subrasante"]],
-                ["Código", selected_row["Código"]],
-                ["Superficie", selected_row["Superficie"]],
-                ["Carpeta", f"{selected_row['Carpeta_cm']} cm"],
-                ["Base", f"{selected_row['Base_cm']} cm"],
-                ["Subbase", f"{selected_row['Subbase_cm']} cm"],
-            ], columns=["Parámetro", "Valor"])
-            st.dataframe(technical, use_container_width=True, hide_index=True)
-            if not exact_match:
-                st.warning("Esta alternativa se muestra únicamente para visualizar el funcionamiento de la aplicación.")
+        if tomo2_result.get("table"):
+            st.info(f"Referencia de asignación: {tomo2_result.get('table')} · página {tomo2_result.get('page')} · {tomo2_result.get('source','GDP-2024 Tomo II')}")
+
+        st.markdown("#### Estado climático del diseño")
+        for level,msg in climate_checks:
+            if level == "error": st.error(msg)
+            elif level == "warning": st.warning(msg)
+            else: st.success(msg)
+
+        if not options.empty:
+            label_map = {}
+            for _, row in options.iterrows():
+                esp = float(row["Carpeta_cm"]) + float(row["Base_cm"]) + float(row["Subbase_cm"])
+                base_label = row.get("Base_tipo", "Base")
+                label = f"{row['Código']} — {row['Superficie']} — {base_label} — {esp:.0f} cm"
+                label_map[label] = str(row["Código"])
+
+            selected_label = st.selectbox("Seleccione una alternativa oficial", list(label_map.keys()), key="official_tomo2_structure")
+            selected_code = label_map[selected_label]
+            selected_row = options[options["Código"].astype(str) == selected_code].iloc[0].to_dict()
+            st.session_state.selected_row = selected_row
+            total_thickness = float(selected_row["Carpeta_cm"]) + float(selected_row["Base_cm"]) + float(selected_row["Subbase_cm"])
+            st.session_state.total_thickness = total_thickness
+
+            st.markdown("### Paquete estructural seleccionado")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Código", selected_row["Código"])
+            k2.metric("Tipo de superficie", selected_row["Superficie"])
+            k3.metric("Espesor de capas", f"{total_thickness:.0f} cm")
+
+            left, right = st.columns([0.9, 2.1], gap="large")
+            with left:
+                st.markdown("#### Capas")
+                if float(selected_row["Carpeta_cm"]) > 0:
+                    st.markdown(f'<div class="layer">Carpeta asfáltica<br><b>{float(selected_row["Carpeta_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="layer">{selected_row["Superficie"]}<br><b>Capa superficial</b></div>', unsafe_allow_html=True)
+                if float(selected_row.get("Base_granular_cm", 0)) > 0:
+                    st.markdown(f'<div class="layer">Base granular<br><b>{float(selected_row["Base_granular_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                if float(selected_row.get("Base_estabilizada_cm", 0)) > 0:
+                    st.markdown(f'<div class="layer">Base estabilizada<br><b>{float(selected_row["Base_estabilizada_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                if float(selected_row["Subbase_cm"]) > 0:
+                    st.markdown(f'<div class="layer">Subbase granular<br><b>{float(selected_row["Subbase_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="layer">Subrasante<br><b>CBR {cbr_design:.2f}%</b></div>', unsafe_allow_html=True)
+                exploded_view = st.toggle("Vista explotada 3D", value=True, help="Separa las capas para identificarlas con mayor facilidad.")
+                st.caption("Use el mouse para girar, acercar y desplazar el modelo.")
+
+            with right:
+                st.markdown("#### Modelo 3D interactivo")
+                fig_3d = pavement_3d_figure(selected_row, sclass, cbr_design, exploded_view)
+                render_rotating_3d(fig_3d, key="structure_view", height=700, auto_rotate=st.session_state.get("auto_rotate_3d", True))
+
+            trace = selected_trace(selected_row)
+            with st.expander("Trazabilidad GDP-2024 de la alternativa", expanded=True):
+                trace_df = pd.DataFrame([
+                    ["Fuente", trace.get("fuente", "")],
+                    ["Decreto", trace.get("decreto", "")],
+                    ["Definición de estructura", trace.get("definicion_estructura", "")],
+                    ["Tabla de asignación", trace.get("asignacion", "")],
+                    ["Criterio aplicado", trace.get("criterio", "")],
+                    ["Celda original", trace.get("celda_original", "")],
+                    ["Nota de extracción", trace.get("nota_extraccion", "")],
+                ], columns=["Elemento", "Referencia"])
+                st.dataframe(trace_df, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Descargar trazabilidad de la alternativa (CSV)",
+                    trace_df.to_csv(index=False).encode("utf-8-sig"),
+                    f"trazabilidad_{selected_row['Código']}.csv",
+                    "text/csv",
+                )
+        else:
+            selected_row = None
+            st.session_state.selected_row = None
+            st.session_state.total_thickness = 0.0
     else:
-        selected_row = None
-        st.warning("No existen alternativas disponibles en el catálogo cargado.")
-
-    with st.expander("Administración avanzada del catálogo"):
-        st.caption("Esta sección está dirigida a usuarios que desean cargar o editar las tablas del catálogo.")
-        edited_catalog = st.data_editor(catalog, num_rows="dynamic", use_container_width=True, key="catalog_editor")
-        if st.button("Guardar cambios del catálogo"):
-            st.session_state.catalog = edited_catalog.copy()
-            st.success("Catálogo actualizado para esta sesión.")
+        st.subheader("Evaluación de estructura propuesta — Tomo I")
+        st.info("El catálogo Tomo II no se utiliza cuando está activo Tomo I. Puede volver a Tomo II para seleccionar una estructura oficial o continuar con el diseño mecanístico-empírico preliminar.")
+        selected_row = st.session_state.get("selected_row")
+        if selected_row:
+            st.caption(f"Estructura actualmente cargada: {selected_row.get('Código','')} — {selected_row.get('Superficie','')}")
+        else:
+            st.warning("No hay una estructura seleccionada. Active Tomo II para obtener una alternativa de catálogo o cargue una estructura mediante el flujo de diseño correspondiente.")
 
 
 with pflex:
@@ -1557,24 +1566,34 @@ with pperf:
 
 with pcompare:
     st.subheader("Comparación técnica y económica de alternativas")
-    catalog_compare=st.session_state.catalog.copy()
-    candidates=catalog_compare[catalog_compare['Subrasante']==sclass].copy()
-    if candidates.empty: candidates=catalog_compare.copy()
-    cp1,cp2,cp3=st.columns(3)
-    surf_price=cp1.number_input("Precio referencial superficie (₡/m³)",0.0,value=95000.0,step=5000.0,key='cmp_surf')
-    base_price=cp2.number_input("Precio referencial base (₡/m³)",0.0,value=28000.0,step=1000.0,key='cmp_base')
-    sub_price=cp3.number_input("Precio referencial subbase (₡/m³)",0.0,value=22000.0,step=1000.0,key='cmp_sub')
-    cmp_area=st.number_input("Área para comparación (m²)",1.0,value=900.0,step=50.0,key='cmp_area')
-    candidates['Espesor_total_cm']=candidates[['Carpeta_cm','Base_cm','Subbase_cm']].sum(axis=1)
-    candidates['Costo_inicial']=cmp_area*(candidates['Carpeta_cm']/100*surf_price+candidates['Base_cm']/100*base_price+candidates['Subbase_cm']/100*sub_price)
-    candidates['Coincidencia']=candidates.apply(lambda r: 'Exacta' if r['Tránsito']==tclass and r['Subrasante']==sclass else 'Referencia',axis=1)
-    cmin=max(float(candidates['Costo_inicial'].min()),1.0); cmax=max(float(candidates['Costo_inicial'].max()),cmin)
-    emin=max(float(candidates['Espesor_total_cm'].min()),1.0); emax=max(float(candidates['Espesor_total_cm'].max()),emin)
-    candidates['Índice técnico-económico']=100-(55*(candidates['Costo_inicial']-cmin)/(cmax-cmin+1e-9)+25*(candidates['Espesor_total_cm']-emin)/(emax-emin+1e-9)+20*(candidates['Coincidencia']!='Exacta').astype(float))
-    show=candidates[['Código','Superficie','Tránsito','Subrasante','Espesor_total_cm','Costo_inicial','Coincidencia','Índice técnico-económico']].sort_values(['Coincidencia','Índice técnico-económico'],ascending=[True,False])
-    st.dataframe(show.style.format({'Costo_inicial':'₡{:,.0f}','Espesor_total_cm':'{:.0f}'}),use_container_width=True,hide_index=True)
-    st.bar_chart(show.set_index('Código')['Costo_inicial'])
-    st.session_state.alternatives_compare=show
+    if active_tomo == "Tomo II":
+        candidates = st.session_state.get("tomo2_options", pd.DataFrame()).copy()
+        st.caption("Comparación limitada a las alternativas oficiales asignadas por la celda normativa vigente para el proyecto.")
+    else:
+        candidates = st.session_state.catalog.copy()
+        st.caption("Comparación preliminar de referencia para Tomo I.")
+
+    if candidates.empty:
+        st.info("No hay alternativas compatibles disponibles para comparar.")
+        st.session_state.alternatives_compare = pd.DataFrame()
+    else:
+        cp1,cp2,cp3=st.columns(3)
+        surf_price=cp1.number_input("Precio referencial superficie (₡/m³)",0.0,value=95000.0,step=5000.0,key='cmp_surf')
+        base_price=cp2.number_input("Precio referencial base (₡/m³)",0.0,value=28000.0,step=1000.0,key='cmp_base')
+        sub_price=cp3.number_input("Precio referencial subbase (₡/m³)",0.0,value=22000.0,step=1000.0,key='cmp_sub')
+        cmp_area=st.number_input("Área para comparación (m²)",1.0,value=900.0,step=50.0,key='cmp_area')
+        candidates['Espesor_total_cm']=candidates[['Carpeta_cm','Base_cm','Subbase_cm']].sum(axis=1)
+        candidates['Costo_inicial']=cmp_area*(candidates['Carpeta_cm']/100*surf_price+candidates['Base_cm']/100*base_price+candidates['Subbase_cm']/100*sub_price)
+        candidates['Coincidencia']='Oficial GDP-2024' if active_tomo == "Tomo II" else 'Referencia'
+        cmin=max(float(candidates['Costo_inicial'].min()),1.0); cmax=max(float(candidates['Costo_inicial'].max()),cmin)
+        emin=max(float(candidates['Espesor_total_cm'].min()),1.0); emax=max(float(candidates['Espesor_total_cm'].max()),emin)
+        candidates['Índice técnico-económico']=100-(60*(candidates['Costo_inicial']-cmin)/(cmax-cmin+1e-9)+40*(candidates['Espesor_total_cm']-emin)/(emax-emin+1e-9))
+        base_cols=['Código','Superficie','Espesor_total_cm','Costo_inicial','Coincidencia','Índice técnico-económico']
+        trace_cols=[c for c in ['Tabla_asignacion','Criterio_GDP'] if c in candidates.columns]
+        show=candidates[base_cols+trace_cols].sort_values('Índice técnico-económico',ascending=False)
+        st.dataframe(show.style.format({'Costo_inicial':'₡{:,.0f}','Espesor_total_cm':'{:.0f}'}),use_container_width=True,hide_index=True)
+        st.bar_chart(show.set_index('Código')['Costo_inicial'])
+        st.session_state.alternatives_compare=show
 
 with p5:
     st.subheader("Costos de construcción y cantidades de obra")
@@ -1667,6 +1686,10 @@ with pvalid:
         v2.metric("Nivel de trazabilidad", "Alto" if n_ok>=n_total-1 else "Medio")
         v3.metric("Resultado", "Apto para revisión" if n_ok>=n_total-1 else "Requiere ajustes")
         st.dataframe(validation_df,use_container_width=True,hide_index=True)
+        if active_tomo == "Tomo II":
+            trace = selected_trace(selected_row)
+            st.markdown("#### Referencia normativa de la selección")
+            st.info(f"{trace.get('fuente','GDP-2024 Tomo II')} · {trace.get('asignacion','')} · {trace.get('criterio','')}")
         st.download_button("Descargar matriz de validación (CSV)",validation_df.to_csv(index=False).encode("utf-8-sig"),"matriz_validacion_gdp.csv","text/csv")
         st.markdown("#### Controles de emisión")
         c1,c2,c3=st.columns(3)
@@ -1728,6 +1751,8 @@ with p6:
         "climate": {"station": station_selected, "air_c": air_temp_c, "pavement_ltpp_c": tp_ltpp, "pavement_shrp_c": tp_shrp, "latitude": latitude, "depth_mm": depth_mm, "alerts": [m for _,m in climate_checks]},
         "active_tomo": active_tomo,
         "selected": selected_row,
+        "gdp_tomo2": st.session_state.get("tomo2_result", {}) if active_tomo == "Tomo II" else {},
+        "traceability": selected_trace(selected_row),
         "flex_design": st.session_state.get("flex_design", {}),
         "drainage": st.session_state.get("drainage", {}),
         "lifecycle_npv": st.session_state.get("lifecycle_npv", 0.0),
@@ -1771,7 +1796,7 @@ with p6:
         f"**{cbr_design:.2f}%**, clasificación **{sclass}**, y un módulo resiliente estimado de "
         f"**{mr:.2f} MPa**."
     )
-    st.warning("La aplicación no sustituye la memoria de cálculo firmada ni la verificación con las tablas completas y vigentes del GDP.")
+    st.warning("La aplicación no sustituye la memoria de cálculo firmada. En Tomo II la selección se obtiene de las tablas GDP-2024 integradas; aun así deben verificarse estudios, materiales, drenaje, condiciones particulares y criterio profesional responsable.")
 
 with pdash:
     # Dashboard profesional v0.9.1: una sola vista de control, similar al tablero de referencia.
