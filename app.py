@@ -22,6 +22,7 @@ st.set_page_config(
     page_title="GDP Pavimentos Pro v1.1.3 Web Ready",
     page_icon="🛣️",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
@@ -1178,6 +1179,36 @@ with st.sidebar:
         mime="text/csv",
         help="Archivo heredado conservado únicamente para compatibilidad y referencia; no alimenta la selección oficial del Tomo II.",
     )
+
+# Acceso visible a cuenta y proyectos, aun cuando la barra lateral se haya colapsado manualmente.
+st.markdown("### 👤 Cuenta y proyectos")
+if int(user.get("id", 0)) > 0:
+    account_col, save_col = st.columns([3, 1])
+    with account_col:
+        st.success(
+            f"Sesión iniciada como **{user.get('display_name', user.get('username', 'Usuario'))}**. "
+            f"Proyecto de guardado actual: **{project_name_web or 'Sin nombre'}**. "
+            "La administración completa de proyectos también está disponible en la barra lateral **Mis proyectos**."
+        )
+    with save_col:
+        if st.button("💾 Guardar proyecto ahora", use_container_width=True, key="main_save_project"):
+            if project_name_web.strip():
+                save_project(int(user["id"]), project_name_web.strip(), _capture_session_state())
+                st.success("Proyecto guardado correctamente.")
+                st.rerun()
+            else:
+                st.warning("Indique un nombre para el proyecto en la barra lateral.")
+else:
+    guest_col, login_col = st.columns([3, 1])
+    with guest_col:
+        st.warning(
+            "Está usando GDP Pavimentos Pro como **invitado**. Puede realizar cálculos, pero los proyectos no se guardan permanentemente. "
+            "Inicie sesión o cree una cuenta para activar **Mis proyectos**."
+        )
+    with login_col:
+        if st.button("🔐 Iniciar sesión / Crear cuenta", use_container_width=True, key="main_login_from_guest"):
+            st.session_state.clear()
+            st.rerun()
 
 # Selector principal de metodología
 if "active_tomo" not in st.session_state:
