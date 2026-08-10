@@ -1,0 +1,29 @@
+name: Validar persistencia web
+
+on:
+  push:
+    branches:
+      - agent/postgres-persistencia
+  pull_request:
+    paths:
+      - 'web_storage.py'
+      - 'requirements.txt'
+      - 'tests/test_web_storage.py'
+      - '.github/workflows/validate-storage.yml'
+
+jobs:
+  test-storage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pandas pytest "psycopg[binary]>=3.2"
+      - name: Verificar sintaxis
+        run: python -m py_compile web_storage.py
+      - name: Ejecutar pruebas de persistencia
+        run: python -m pytest -q tests/test_web_storage.py
