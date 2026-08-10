@@ -1229,37 +1229,77 @@ with p1:
 
 with p2:
     st.subheader("Composición vehicular y factores camión")
-    st.info("Digite directamente la cantidad diaria de cada categoría. Los resultados se recalculan automáticamente.")
+    st.info(
+        "Ingrese el conteo diario en la columna **Cantidad diaria (veh/día)**. "
+        "El **Factor camión** es un parámetro técnico independiente utilizado para convertir cada categoría a ejes equivalentes."
+    )
 
     current = st.session_state.vehicles.copy()
-    vehicle_values = []
-    cols = st.columns(3)
-    for idx, row in current.iterrows():
-        with cols[idx % 3]:
-            qty = st.number_input(
-                f"{row['Categoría']} (veh/día)",
+    vehicle_editor = current.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
+        ["Categoría", "Cantidad diaria (veh/día)", "Factor camión"]
+    ]
+    vehicle_editor["Cantidad diaria (veh/día)"] = pd.to_numeric(
+        vehicle_editor["Cantidad diaria (veh/día)"], errors="coerce"
+    ).fillna(0).astype(int)
+    vehicle_editor["Factor camión"] = pd.to_numeric(
+        vehicle_editor["Factor camión"], errors="coerce"
+    ).fillna(0.0)
+
+    edited_vehicles = st.data_editor(
+        vehicle_editor,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        key="vehicle_composition_editor",
+        column_config={
+            "Categoría": st.column_config.TextColumn(
+                "Categoría vehicular",
+                disabled=True,
+                help="Tipo de vehículo considerado en el aforo."
+            ),
+            "Cantidad diaria (veh/día)": st.column_config.NumberColumn(
+                "Cantidad diaria (veh/día)",
                 min_value=0,
                 max_value=1_000_000,
-                value=int(float(row['TPD'])),
                 step=1,
-                key=f"veh_qty_{idx}",
-            )
-            fc = st.number_input(
-                f"Factor camión — {row['Categoría']}",
+                format="%d",
+                help="Cantidad promedio de vehículos por día para esta categoría."
+            ),
+            "Factor camión": st.column_config.NumberColumn(
+                "Factor camión",
                 min_value=0.0,
                 max_value=100.0,
-                value=float(row['Factor camión']),
                 step=0.01,
                 format="%.4f",
-                key=f"veh_fc_{idx}",
-            )
-            vehicle_values.append([row['Categoría'], fc, qty])
+                help="Factor técnico usado para convertir el tránsito de la categoría a ejes equivalentes."
+            ),
+        },
+    )
 
-    vehicles = pd.DataFrame(vehicle_values, columns=["Categoría", "Factor camión", "TPD"])
+    edited_vehicles["Cantidad diaria (veh/día)"] = pd.to_numeric(
+        edited_vehicles["Cantidad diaria (veh/día)"], errors="coerce"
+    ).fillna(0).clip(lower=0).astype(int)
+    edited_vehicles["Factor camión"] = pd.to_numeric(
+        edited_vehicles["Factor camión"], errors="coerce"
+    ).fillna(0.0).clip(lower=0.0)
+
+    vehicles = edited_vehicles.rename(columns={"Cantidad diaria (veh/día)": "TPD"})[
+        ["Categoría", "Factor camión", "TPD"]
+    ]
     st.session_state.vehicles = vehicles
 
+    with st.expander("¿Cuál es la diferencia entre cantidad diaria y factor camión?"):
+        st.markdown(
+            "- **Cantidad diaria (veh/día):** dato del conteo o aforo de tránsito.\n"
+            "- **Factor camión:** parámetro técnico de equivalencia de carga; no representa una cantidad de vehículos.\n"
+            "- El cálculo de ejes equivalentes combina ambos valores, pero se mantienen separados para evitar errores de digitación."
+        )
+
     st.markdown("#### Resumen del conteo ingresado")
-    st.dataframe(vehicles, use_container_width=True, hide_index=True)
+    summary_vehicles = vehicles.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
+        ["Categoría", "Cantidad diaria (veh/día)", "Factor camión"]
+    ]
+    st.dataframe(summary_vehicles, use_container_width=True, hide_index=True)
 
     a, b, c, d = st.columns(4)
     with a:
