@@ -15,11 +15,14 @@ def replace_once(old: str, new: str, label: str) -> None:
     print(f"{label}: applied")
 
 
-replace_once(
-    "from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)\n",
-    "from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)\nfrom gdp_tomo2_adapter import alternatives_for_app, selected_trace\n",
-    "import adapter",
-)
+if "from gdp_tomo2_adapter import alternatives_for_app, selected_trace\n" not in text:
+    replace_once(
+        "from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)\n",
+        "from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)\nfrom gdp_tomo2_adapter import alternatives_for_app, selected_trace\n",
+        "import adapter",
+    )
+else:
+    print("import adapter: already applied")
 
 text = text.replace("GDP Pavimentos Pro v1.1.2 Web Ready", "GDP Pavimentos Pro v1.1.3 Web Ready")
 text = text.replace("GDP Pavimentos Pro 2024 — v1.1.2 Piloto Cloud", "GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud")
