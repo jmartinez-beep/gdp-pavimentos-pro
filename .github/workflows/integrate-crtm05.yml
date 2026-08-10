@@ -1,0 +1,75 @@
+name: Integrar CRTM05 a WGS84
+
+on:
+  push:
+    branches:
+      - agent/crtm05-wgs84
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'geo_cr.py'
+      - 'requirements.txt'
+      - 'tools/integrate_crtm05.py'
+      - 'tools/fix_crtm05_label.py'
+      - 'tests/test_geo_cr.py'
+      - '.github/workflows/integrate-crtm05.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+      - name: Aplicar integración CRTM05 WGS84
+        run: |
+          python tools/integrate_crtm05.py
+          python tools/fix_crtm05_label.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py geo_cr.py
+      - name: Probar transformaciones
+        run: python -m pytest -q tests/test_geo_cr.py
+      - name: Verificar integración en la aplicación
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('app.py').read_text(encoding='utf-8')
+          required = [
+              'CRTM05 (EPSG:5367)',
+              'WGS84 (EPSG:4326)',
+              'crtm05_to_wgs84',
+              'project_crtm_easting',
+              'project_crtm_northing',
+              'crtm05_easting_m',
+              'crtm05_northing_m',
+              '"latitude": latitude',
+              '"longitude": longitude',
+              'Este inicial CRTM05',
+              'Longitud inicial QGIS (WGS84)',
+              'Conversión automática CRTM05 → WGS84',
+          ]
+          for item in required:
+              assert item in text, item
+          print('Contrato CRTM05/WGS84 verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar conversión CRTM05 WGS84"
+            git push
+          fi
