@@ -885,6 +885,7 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 <table>
 <tr><th>TPD total</th><td>{traffic['tpd_total']:,.0f} veh/día</td></tr>
 <tr><th>Tasa de crecimiento</th><td>{traffic['growth_rate']:.2f}%</td></tr>
+<tr><th>Factor de crecimiento acumulado G</th><td>{traffic.get('growth_factor', 0):.3f}</td></tr>
 <tr><th>Periodo de diseño</th><td>{traffic['years']} años</td></tr>
 <tr><th>Factor direccional</th><td>{traffic['direction_factor']:.3f}</td></tr>
 <tr><th>Factor de carril</th><td>{traffic['lane_factor']:.3f}</td></tr>
@@ -995,7 +996,7 @@ def build_pdf_report(payload: dict) -> bytes:
     story.append(Paragraph("GDP Pavimentos Pro 2024 — Memoria preliminar", styles["Title"]))
     story.append(Paragraph(f"Proyecto: {payload['project']['name']} — {payload['project']['location']}", styles["Normal"]))
     story.append(Spacer(1,12))
-    rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
+    rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["Crecimiento anual", f"{payload['traffic']['growth_rate']:.2f}%"], ["Factor de crecimiento G", f"{payload['traffic'].get('growth_factor', 0):.3f}"], ["Periodo de diseño", f"{payload['traffic']['years']} años"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
     if payload.get('selected'):
         rows += [["Estructura", str(payload['selected'].get('Código',''))], ["Superficie", str(payload['selected'].get('Superficie',''))]]
     t=Table(rows, colWidths=[180,300]); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#0f6fff')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.5,colors.grey),('PADDING',(0,0),(-1,-1),7)])); story.append(t)
@@ -1324,10 +1325,15 @@ with p2:
     m1.metric("TPD total", f"{tpd_total:,.0f}")
     m2.metric("Vehículos pesados", f"{heavy_total:,.0f}", f"{heavy_pct:.2f}%")
     m3.metric("Ejes equivalentes diarios", f"{weighted_daily:,.2f}")
-    m4.metric("Factor acumulado", f"{gf:,.3f}")
+    m4.metric("Factor de crecimiento G", f"{gf:,.3f}")
     m5.metric("EEq de diseño", f"{esal:,.0f}", tclass)
 
-    st.latex(r"EEq = 365 \cdot \left[\sum(TPD_i\,FC_i)\right] \cdot FD \cdot FCarril \cdot \frac{(1+r)^Y-1}{r}")
+    st.latex(r"EEq = 365 \cdot \left[\sum(TPD_i\,FC_i)\right] \cdot FD \cdot FCarril \cdot G, \qquad G=\frac{(1+r)^Y-1}{r}")
+    st.info(
+        f"**Factor de crecimiento acumulado G = {gf:,.3f}** · "
+        f"calculado con r = {growth_pct:.2f}% anual y Y = {int(years)} años. "
+        "G transforma el tránsito del año base en la acumulación equivalente durante el período de diseño."
+    )
     st.caption("Cada cantidad corresponde al tránsito promedio diario de esa categoría. Revise cuidadosamente valores atípicos antes de continuar.")
 
 with p3:
@@ -1780,6 +1786,7 @@ with p6:
             "tpd_total": tpd_total,
             "weighted_daily": weighted_daily,
             "growth_rate": growth_pct,
+            "growth_factor": gf,
             "years": int(years),
             "direction_factor": direction_factor,
             "lane_factor": lane_factor,
@@ -1861,7 +1868,7 @@ with pdash:
         (k1,"Clasificación de tránsito",tclass,f"ESAL: {esal:,.2e}<br>TPD: {tpd_total:,.0f} veh/día","#218cff"),
         (k2,"Vehículos pesados",f"{heavy_pct_dash:.1f}%",f"Pesados: {heavy_total:,.0f} veh/día<br>TPDA estimado: {tpd_total:,.0f}","#3bd56d"),
         (k3,"Subrasante",sclass,f"CBR: {cbr_design:.2f}%<br>Módulo resiliente: {mr:.1f} MPa","#9d50ff"),
-        (k4,"Periodo de diseño",f"{int(years)} años",f"Crecimiento: {growth_pct:.2f}%<br>Factor acumulado: {gf:.3f}","#ff831d"),
+        (k4,"Periodo de diseño",f"{int(years)} años",f"Crecimiento: {growth_pct:.2f}%<br>Factor G: {gf:.3f}","#ff831d"),
         (k5,"Temperatura sitio",f"{air_temp_c:.1f} °C",f"Pavimento LTPP: {tp_ltpp:.1f} °C<br>Pavimento SHRP: {tp_shrp:.1f} °C","#ff4545"),
         (k6,"Estructura seleccionada",str(selected_dash.get('Código','—')) if selected_dash else "—",f"{selected_dash.get('Superficie','Sin seleccionar') if selected_dash else 'Sin seleccionar'}<br>Espesor: {selected_total:.0f} cm","#15c6ca"),
     ]
