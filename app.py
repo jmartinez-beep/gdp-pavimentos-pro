@@ -1285,7 +1285,7 @@ with p1:
         )
         longitude, latitude = crtm05_to_wgs84(crtm_easting, crtm_northing)
         st.success(
-            f"Conversión automática WGS84 → Latitud **{latitude:.7f}°**, Longitud **{longitude:.7f}°**"
+            f"Conversión automática CRTM05 → WGS84: Latitud **{latitude:.7f}°**, Longitud **{longitude:.7f}°**"
         )
     else:
         gc1, gc2 = st.columns(2)
