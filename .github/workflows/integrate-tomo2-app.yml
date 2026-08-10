@@ -1,0 +1,48 @@
+name: Integrar Tomo II en app
+
+on:
+  push:
+    branches:
+      - agent/integrar-tomo2-en-app
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'gdp_tomo2.py'
+      - 'gdp_tomo2_adapter.py'
+      - 'tools/integrate_tomo2_app.py'
+      - 'tests/test_gdp_tomo2.py'
+      - 'tests/test_gdp_tomo2_adapter.py'
+      - '.github/workflows/integrate-tomo2-app.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pandas pytest streamlit plotly reportlab openpyxl ezdxf
+      - name: Integrar motor Tomo II en app.py
+        run: python tools/integrate_tomo2_app.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py gdp_tomo2.py gdp_tomo2_adapter.py
+      - name: Ejecutar pruebas
+        run: python -m pytest -q tests/test_gdp_tomo2.py tests/test_gdp_tomo2_adapter.py
+      - name: Guardar app.py integrado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar catálogo oficial Tomo II en app"
+            git push
+          fi
