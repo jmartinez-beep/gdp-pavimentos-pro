@@ -36,6 +36,7 @@ jobs:
       - name: Ejecutar pruebas
         run: python -m pytest -q tests/test_gdp_tomo2.py tests/test_gdp_tomo2_adapter.py
       - name: Guardar app.py integrado
+        if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
