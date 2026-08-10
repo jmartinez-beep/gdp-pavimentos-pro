@@ -11,6 +11,7 @@ import os
 
 from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
+from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -879,6 +880,8 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 <h1>Memoria preliminar de diseño de pavimento</h1>
 <p><b>Proyecto:</b> {project['name']}<br>
 <b>Ubicación:</b> {project['location']}<br>
+<b>CRTM05 (EPSG:5367):</b> E {project.get('crtm05_easting_m', 0):,.3f} m · N {project.get('crtm05_northing_m', 0):,.3f} m<br>
+<b>WGS84 (EPSG:4326):</b> {project.get('latitude', 0):.7f}°, {project.get('longitude', 0):.7f}°<br>
 <b>Fecha:</b> {project['date']}<br>
 <b>Responsable:</b> {project['engineer']}</p>
 
@@ -996,6 +999,12 @@ def build_pdf_report(payload: dict) -> bytes:
     styles = getSampleStyleSheet(); story=[]
     story.append(Paragraph("GDP Pavimentos Pro 2024 — Memoria preliminar", styles["Title"]))
     story.append(Paragraph(f"Proyecto: {payload['project']['name']} — {payload['project']['location']}", styles["Normal"]))
+    story.append(Paragraph(
+        f"CRTM05 EPSG:5367: E {payload['project'].get('crtm05_easting_m', 0):,.3f} m, "
+        f"N {payload['project'].get('crtm05_northing_m', 0):,.3f} m · "
+        f"WGS84 EPSG:4326: {payload['project'].get('latitude', 0):.7f}°, {payload['project'].get('longitude', 0):.7f}°",
+        styles["Normal"],
+    ))
     story.append(Spacer(1,12))
     rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["Crecimiento anual", f"{payload['traffic']['growth_rate']:.2f}%"], ["Factor de crecimiento G", f"{payload['traffic'].get('growth_factor', 0):.3f}"], ["Periodo de diseño", f"{payload['traffic']['years']} años"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
     if payload.get('selected'):
@@ -1256,8 +1265,51 @@ with p1:
         project_date = st.date_input("Fecha", date.today())
         road_type = st.selectbox("Tipo de vía", ["Camino de bajo volumen", "Urbanización", "Vía local", "Otro"])
         pavement_type = st.selectbox("Tipo de pavimento", ["Flexible", "Semirrígido", "Por definir"])
-        latitude = st.number_input("Latitud del proyecto (grados decimales)", min_value=-90.0, max_value=90.0, value=9.93, step=0.01, format="%.4f")
-    st.caption("Los datos se incorporan automáticamente en el informe descargable.")
+
+    st.markdown("### Ubicación geográfica y conversión de coordenadas")
+    st.caption("CRTM05 se procesa como EPSG:5367 y WGS84 como EPSG:4326 mediante PROJ/pyproj. La conversión se actualiza automáticamente al cambiar los valores.")
+    coordinate_system = st.segmented_control(
+        "Sistema de coordenadas de entrada",
+        ["CRTM05 (EPSG:5367)", "WGS84 (EPSG:4326)"],
+        default="CRTM05 (EPSG:5367)",
+        key="project_coordinate_system",
+    ) or "CRTM05 (EPSG:5367)"
+
+    if coordinate_system.startswith("CRTM05"):
+        gc1, gc2 = st.columns(2)
+        crtm_easting = gc1.number_input(
+            "Este CRTM05 (m)", value=500000.0, step=1.0, format="%.3f", key="project_crtm_easting"
+        )
+        crtm_northing = gc2.number_input(
+            "Norte CRTM05 (m)", value=1100000.0, step=1.0, format="%.3f", key="project_crtm_northing"
+        )
+        longitude, latitude = crtm05_to_wgs84(crtm_easting, crtm_northing)
+        st.success(
+            f"Conversión automática WGS84 → Latitud **{latitude:.7f}°**, Longitud **{longitude:.7f}°**"
+        )
+    else:
+        gc1, gc2 = st.columns(2)
+        latitude = gc1.number_input(
+            "Latitud WGS84 (°)", min_value=-90.0, max_value=90.0, value=9.93, step=0.000001, format="%.7f", key="project_wgs84_latitude"
+        )
+        longitude = gc2.number_input(
+            "Longitud WGS84 (°)", min_value=-180.0, max_value=180.0, value=-84.10, step=0.000001, format="%.7f", key="project_wgs84_longitude"
+        )
+        crtm_easting, crtm_northing = wgs84_to_crtm05(longitude, latitude)
+        st.info(
+            f"Equivalente CRTM05 → Este **{crtm_easting:,.3f} m**, Norte **{crtm_northing:,.3f} m**"
+        )
+
+    if not is_plausible_costa_rica_wgs84(longitude, latitude):
+        st.warning("La coordenada convertida queda fuera del entorno geográfico amplio de Costa Rica. Revise sistema, Este/Norte o latitud/longitud antes de continuar.")
+
+    loc1, loc2, loc3, loc4 = st.columns(4)
+    loc1.metric("Este CRTM05", f"{crtm_easting:,.3f} m")
+    loc2.metric("Norte CRTM05", f"{crtm_northing:,.3f} m")
+    loc3.metric("Latitud WGS84", f"{latitude:.7f}°")
+    loc4.metric("Longitud WGS84", f"{longitude:.7f}°")
+    st.map(pd.DataFrame({"lat": [latitude], "lon": [longitude]}), latitude="lat", longitude="lon", zoom=10)
+    st.caption("Las coordenadas CRTM05 y WGS84 quedan incluidas en el estado guardado del proyecto y en las exportaciones.")
 
 with p2:
     st.subheader("Composición vehicular y factores camión")
@@ -1782,19 +1834,20 @@ with pvalid:
 with pexport:
     st.subheader("Exportación de planos, memorias e integración futura")
     st.caption("Se generan formatos de intercambio para continuar el trabajo en Excel, Civil 3D y QGIS. La importación final debe verificarse en cada software.")
+    st.info("Los valores iniciales se toman automáticamente de la ubicación definida en **1. Proyecto**. Puede modificarlos aquí si la exportación corresponde a otro punto del eje.")
     ex1,ex2,ex3=st.columns(3)
-    start_e=ex1.number_input("Este inicial",value=500000.0,step=10.0)
-    start_n=ex2.number_input("Norte inicial",value=1100000.0,step=10.0)
+    start_e=ex1.number_input("Este inicial CRTM05",value=float(crtm_easting),step=10.0,format="%.3f")
+    start_n=ex2.number_input("Norte inicial CRTM05",value=float(crtm_northing),step=10.0,format="%.3f")
     azimuth=ex3.number_input("Azimut del eje (°)",0.0,360.0,value=90.0,step=1.0)
     ex4,ex5,ex6=st.columns(3)
     export_length=ex4.number_input("Longitud de eje (m)",1.0,value=float(length_m if 'length_m' in locals() else 150.0),step=10.0)
     interval=ex5.number_input("Intervalo de puntos (m)",1.0,value=10.0,step=1.0)
     elevation=ex6.number_input("Elevación de referencia (m)",value=100.0,step=0.1)
     lon1,lat1,lon2,lat2=st.columns(4)
-    start_lon=lon1.number_input("Longitud inicial QGIS",-180.0,180.0,value=-84.10,format='%.6f')
-    start_lat=lat1.number_input("Latitud inicial QGIS",-90.0,90.0,value=9.93,format='%.6f')
-    end_lon=lon2.number_input("Longitud final QGIS",-180.0,180.0,value=-84.09,format='%.6f')
-    end_lat=lat2.number_input("Latitud final QGIS",-90.0,90.0,value=9.93,format='%.6f')
+    start_lon=lon1.number_input("Longitud inicial QGIS (WGS84)",-180.0,180.0,value=float(longitude),format='%.7f')
+    start_lat=lat1.number_input("Latitud inicial QGIS (WGS84)",-90.0,90.0,value=float(latitude),format='%.7f')
+    end_lon=lon2.number_input("Longitud final QGIS (WGS84)",-180.0,180.0,value=float(longitude + 0.001),format='%.7f')
+    end_lat=lat2.number_input("Latitud final QGIS (WGS84)",-90.0,90.0,value=float(latitude),format='%.7f')
     if selected_row:
         st.download_button("Descargar sección transversal DXF",build_section_dxf(selected_row,float(width_m if 'width_m' in locals() else 6.0)),"seccion_pavimento.dxf","application/dxf")
     st.download_button("Descargar puntos para Civil 3D (CSV)",build_civil3d_csv(start_e,start_n,azimuth,export_length,interval,elevation),"eje_civil3d.csv","text/csv")
@@ -1812,6 +1865,13 @@ with p6:
             "date": project_date.isoformat(),
             "road_type": road_type,
             "pavement_type": pavement_type,
+            "coordinate_system_input": coordinate_system,
+            "crtm05_epsg": 5367,
+            "crtm05_easting_m": crtm_easting,
+            "crtm05_northing_m": crtm_northing,
+            "wgs84_epsg": 4326,
+            "latitude": latitude,
+            "longitude": longitude,
         },
         "traffic": {
             "tpd_total": tpd_total,
