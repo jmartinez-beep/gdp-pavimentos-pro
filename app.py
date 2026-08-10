@@ -11,6 +11,7 @@ import os
 
 from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
+from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 
 import pandas as pd
 import plotly.graph_objects as go
