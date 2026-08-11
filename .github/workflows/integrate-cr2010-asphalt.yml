@@ -22,10 +22,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Instalar dependencias
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
       - name: Aplicar integración CR-2010
         run: python tools/integrate_cr2010_asphalt.py
       - name: Verificar sintaxis
