@@ -13,6 +13,7 @@ from web_storage import (authenticate, create_user, delete_project, list_project
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
+from cr2010_asphalt import render_asphalt_cr2010_checklist
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -989,6 +990,10 @@ def build_excel_workbook(payload: dict, vehicles_df: pd.DataFrame, alternatives_
         pd.DataFrame([climate_payload]).to_excel(writer, sheet_name="Clima", index=False)
         if monthly_rows:
             pd.DataFrame(monthly_rows).to_excel(writer, sheet_name="Clima_mensual", index=False)
+        asphalt_control = payload.get("asphalt_cr2010", {})
+        if asphalt_control:
+            pd.DataFrame([{k:v for k,v in asphalt_control.items() if k != "checks"}]).to_excel(writer, sheet_name="Control_CR2010", index=False)
+            pd.DataFrame(asphalt_control.get("checks", [])).to_excel(writer, sheet_name="Checklist_CR2010", index=False)
         alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)
         maintenance_df.to_excel(writer, sheet_name="Ciclo_vida", index=False)
         pd.DataFrame([payload.get("drainage", {})]).to_excel(writer, sheet_name="Drenaje", index=False)
@@ -1022,6 +1027,13 @@ def build_pdf_report(payload: dict) -> bytes:
     ]
     if payload.get('selected'):
         rows += [["Estructura", str(payload['selected'].get('Código',''))], ["Superficie", str(payload['selected'].get('Superficie',''))]]
+    asphalt_control = payload.get("asphalt_cr2010", {})
+    if asphalt_control:
+        rows += [
+            ["Control CR-2010 asfaltos", f"{asphalt_control.get('compliant', 0)}/{asphalt_control.get('total_applicable', 0)} controles"],
+            ["Cumplimiento CR-2010", f"{asphalt_control.get('compliance_pct', 0):.0f}%"],
+            ["No conformidades críticas", str(asphalt_control.get('critical_nonconformities', 0))],
+        ]
     t=Table(rows, colWidths=[180,300]); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#0f6fff')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.5,colors.grey),('PADDING',(0,0),(-1,-1),7)])); story.append(t)
     story.append(Spacer(1,14))
     story.append(Paragraph("Advertencia: resultado preliminar sujeto a verificación profesional, caracterización de materiales, drenaje, control de calidad y aplicación integral del GDP-2024.", styles["Italic"]))
@@ -1263,9 +1275,9 @@ GDP Pavimentos Pro 2024 — versión 1.1 · Web Ready Multiusuario
 </div>
 """, unsafe_allow_html=True)
 
-pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pexport, p6 = st.tabs([
+pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6 = st.tabs([
     "🏠 Dashboard", "1. Proyecto", "2. Tránsito", "3. Subrasante", "4. Clima", "5. Estructura",
-    "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Exportación", "14. Informe"
+    "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Control CR-2010", "14. Exportación", "15. Informe"
 ])
 
 with p1:
@@ -1881,16 +1893,22 @@ with pvalid:
             st.info(f"{trace.get('fuente','GDP-2024 Tomo II')} · {trace.get('asignacion','')} · {trace.get('criterio','')}")
         st.download_button("Descargar matriz de validación (CSV)",validation_df.to_csv(index=False).encode("utf-8-sig"),"matriz_validacion_gdp.csv","text/csv")
         st.markdown("#### Controles de emisión")
-        c1,c2,c3=st.columns(3)
+        c1,c2,c3,c4=st.columns(4)
         c1.checkbox("Datos de tránsito revisados",key="qa_traffic")
         c2.checkbox("Ensayos de subrasante respaldados",key="qa_subgrade")
         c3.checkbox("Drenaje y clima documentados",key="qa_climate")
-        if all(st.session_state.get(k,False) for k in ("qa_traffic","qa_subgrade","qa_climate")) and n_ok>=n_total-1:
+        asphalt_state = st.session_state.get("asphalt_cr2010_checklist", {})
+        asphalt_ready = bool(asphalt_state) and int(asphalt_state.get("critical_nonconformities", 0)) == 0
+        c4.checkbox("Control asfáltico CR-2010 revisado", value=asphalt_ready, key="qa_asphalt_cr2010")
+        if all(st.session_state.get(k,False) for k in ("qa_traffic","qa_subgrade","qa_climate","qa_asphalt_cr2010")) and n_ok>=n_total-1:
             st.success("El expediente está preparado para revisión profesional y emisión controlada.")
         else:
             st.warning("La memoria debe mantenerse como preliminar hasta completar los controles de emisión.")
     else:
         st.info("Seleccione una estructura para ejecutar la validación.")
+
+with pcr2010:
+    asphalt_cr2010_result = render_asphalt_cr2010_checklist(project_name)
 
 with pexport:
     st.subheader("Exportación de planos, memorias e integración futura")
@@ -1967,6 +1985,7 @@ with p6:
         "traceability": selected_trace(selected_row),
         "flex_design": st.session_state.get("flex_design", {}),
         "drainage": st.session_state.get("drainage", {}),
+        "asphalt_cr2010": st.session_state.get("asphalt_cr2010_checklist", {}),
         "lifecycle_npv": st.session_state.get("lifecycle_npv", 0.0),
         "costs": {"area": area_m2, "total": total_cost, "per_m2": per_m2},
     }
