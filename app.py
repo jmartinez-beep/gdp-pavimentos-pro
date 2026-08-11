@@ -145,14 +145,15 @@ st.markdown(
 # -----------------------------
 VEHICLE_DEFAULTS = pd.DataFrame(
     [
-        ["Vehículos livianos", 0.0001, 800],
-        ["Buses", 0.65, 20],
-        ["Camión C2", 0.80, 35],
-        ["Camión C3", 1.40, 20],
-        ["Tractocamión T3-S2", 2.20, 10],
-        ["Otros pesados", 1.00, 5],
+        ["Automóviles / vehículos livianos", "Liviano", 0.0001, 800],
+        ["Pickup / carga liviana", "Carga liviana", 0.0000, 0],
+        ["Buses", "Pesado", 0.65, 20],
+        ["Camión C2", "Pesado", 0.80, 35],
+        ["Camión C3", "Pesado", 1.40, 20],
+        ["Tractocamión T3-S2", "Pesado", 2.20, 10],
+        ["Otros pesados", "Pesado", 1.00, 5],
     ],
-    columns=["Categoría", "Factor camión", "TPD"],
+    columns=["Categoría", "Grupo de tránsito", "Factor camión", "TPD"],
 )
 
 # Catálogo demostrativo. Se deja editable para incorporar las tablas completas del GDP.
@@ -1436,12 +1437,31 @@ with p2:
     st.subheader("Composición vehicular y factores camión")
     st.info(
         "Ingrese el conteo diario en la columna **Cantidad diaria (veh/día)**. "
-        "El **Factor camión** es un parámetro técnico independiente utilizado para convertir cada categoría a ejes equivalentes."
+        "Se separan **automóviles**, **pickup/carga liviana** y **vehículos pesados**. "
+        "El **Factor camión** es un parámetro técnico independiente utilizado para convertir cada categoría a ejes equivalentes; para pickup/carga liviana debe usarse el valor documentado por el estudio o proyecto."
     )
 
     current = st.session_state.vehicles.copy()
+
+    # Compatibilidad con proyectos guardados antes de separar pickup/carga liviana.
+    if "Grupo de tránsito" not in current.columns:
+        current["Grupo de tránsito"] = current["Categoría"].astype(str).map(
+            lambda x: "Liviano" if x.strip().lower() == "vehículos livianos" else "Pesado"
+        )
+    current["Categoría"] = current["Categoría"].replace({"Vehículos livianos": "Automóviles / vehículos livianos"})
+    current.loc[current["Categoría"].eq("Automóviles / vehículos livianos"), "Grupo de tránsito"] = "Liviano"
+    if not current["Categoría"].astype(str).eq("Pickup / carga liviana").any():
+        pickup = pd.DataFrame([{
+            "Categoría": "Pickup / carga liviana",
+            "Grupo de tránsito": "Carga liviana",
+            "Factor camión": 0.0,
+            "TPD": 0,
+        }])
+        current = pd.concat([current.iloc[:1], pickup, current.iloc[1:]], ignore_index=True)
+    current.loc[current["Categoría"].eq("Pickup / carga liviana"), "Grupo de tránsito"] = "Carga liviana"
+
     vehicle_editor = current.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
-        ["Categoría", "Cantidad diaria (veh/día)", "Factor camión"]
+        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
     ]
     vehicle_editor["Cantidad diaria (veh/día)"] = pd.to_numeric(
         vehicle_editor["Cantidad diaria (veh/día)"], errors="coerce"
@@ -1461,6 +1481,11 @@ with p2:
                 "Categoría vehicular",
                 disabled=True,
                 help="Tipo de vehículo considerado en el aforo."
+            ),
+            "Grupo de tránsito": st.column_config.TextColumn(
+                "Grupo de tránsito",
+                disabled=True,
+                help="Clasificación usada para separar tránsito liviano, carga liviana y vehículos pesados. Solo el grupo Pesado entra en el porcentaje de pesados del Tomo II."
             ),
             "Cantidad diaria (veh/día)": st.column_config.NumberColumn(
                 "Cantidad diaria (veh/día)",
@@ -1489,7 +1514,7 @@ with p2:
     ).fillna(0.0).clip(lower=0.0)
 
     vehicles = edited_vehicles.rename(columns={"Cantidad diaria (veh/día)": "TPD"})[
-        ["Categoría", "Factor camión", "TPD"]
+        ["Categoría", "Grupo de tránsito", "Factor camión", "TPD"]
     ]
     st.session_state.vehicles = vehicles
 
@@ -1497,12 +1522,13 @@ with p2:
         st.markdown(
             "- **Cantidad diaria (veh/día):** dato del conteo o aforo de tránsito.\n"
             "- **Factor camión:** parámetro técnico de equivalencia de carga; no representa una cantidad de vehículos.\n"
-            "- El cálculo de ejes equivalentes combina ambos valores, pero se mantienen separados para evitar errores de digitación."
+            "- **Grupo de tránsito:** controla la clasificación para el porcentaje de pesados del Tomo II. Pickup/carga liviana no se suma automáticamente como vehículo pesado.\n"
+            "- El cálculo de ejes equivalentes usa el factor individual de cada fila; no se asigna un factor normativo universal a pickup/carga liviana."
         )
 
     st.markdown("#### Resumen del conteo ingresado")
     summary_vehicles = vehicles.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
-        ["Categoría", "Cantidad diaria (veh/día)", "Factor camión"]
+        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
     ]
     st.dataframe(summary_vehicles, use_container_width=True, hide_index=True)
 
@@ -1518,7 +1544,7 @@ with p2:
 
     weighted_daily = float((vehicles["TPD"] * vehicles["Factor camión"]).sum())
     tpd_total = float(vehicles["TPD"].sum())
-    heavy_mask = vehicles["Categoría"].str.lower().ne("vehículos livianos")
+    heavy_mask = vehicles["Grupo de tránsito"].astype(str).str.strip().str.lower().eq("pesado")
     heavy_total = float(vehicles.loc[heavy_mask, "TPD"].sum())
     heavy_pct = (heavy_total / tpd_total * 100.0) if tpd_total > 0 else 0.0
     gf = growth_factor(growth_pct / 100.0, int(years))
