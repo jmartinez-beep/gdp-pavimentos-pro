@@ -46,7 +46,15 @@ jobs:
           for item in required:
               assert item in text, item
           checklist = Path('cr2010_asphalt.py').read_text(encoding='utf-8')
-          for item in ['RAP ≤ 15% en peso', 'Cemento asfáltico ≤ 175 °C', 'Temperatura del aire > 2 °C', 'No conformidades']:
+          for item in [
+              'Temperatura de inicio de compactación',
+              '125.0',
+              'Compactación completada antes de alcanzar 85 °C',
+              'Densidad en sitio entre 92% y 94%',
+              'Espesor colocado ≥ 3 × NMAS',
+              'Apertura recomendada con mezcla ≤ 70 °C',
+              'Ningún valor individual MRI > 3,0 m/km',
+          ]:
               assert item in checklist, item
           print('Contrato del checklist CR-2010 verificado.')
           PY
