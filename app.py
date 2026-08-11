@@ -12,6 +12,7 @@ import os
 from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
+from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -983,7 +984,11 @@ def build_excel_workbook(payload: dict, vehicles_df: pd.DataFrame, alternatives_
         vehicles_df.to_excel(writer, sheet_name="Transito", index=False)
         pd.DataFrame([payload["traffic"]]).to_excel(writer, sheet_name="Resultados_transito", index=False)
         pd.DataFrame([payload["subgrade"]]).to_excel(writer, sheet_name="Subrasante", index=False)
-        pd.DataFrame([payload.get("climate", {})]).to_excel(writer, sheet_name="Clima", index=False)
+        climate_payload = dict(payload.get("climate", {}))
+        monthly_rows = climate_payload.pop("monthly_table", [])
+        pd.DataFrame([climate_payload]).to_excel(writer, sheet_name="Clima", index=False)
+        if monthly_rows:
+            pd.DataFrame(monthly_rows).to_excel(writer, sheet_name="Clima_mensual", index=False)
         alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)
         maintenance_df.to_excel(writer, sheet_name="Ciclo_vida", index=False)
         pd.DataFrame([payload.get("drainage", {})]).to_excel(writer, sheet_name="Drenaje", index=False)
@@ -1007,6 +1012,14 @@ def build_pdf_report(payload: dict) -> bytes:
     ))
     story.append(Spacer(1,12))
     rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["Crecimiento anual", f"{payload['traffic']['growth_rate']:.2f}%"], ["Factor de crecimiento G", f"{payload['traffic'].get('growth_factor', 0):.3f}"], ["Periodo de diseño", f"{payload['traffic']['years']} años"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
+    climate = payload.get("climate", {})
+    rows += [
+        ["Clima - modo", str(climate.get("input_mode", ""))],
+        ["Clima - fuente", str(climate.get("source", ""))],
+        ["Clima - periodo", str(climate.get("period", ""))],
+        ["Clima - estación/zona", str(climate.get("station", ""))],
+        ["Temperatura aire representativa", f"{float(climate.get('air_c', 0)):.1f} °C"],
+    ]
     if payload.get('selected'):
         rows += [["Estructura", str(payload['selected'].get('Código',''))], ["Superficie", str(payload['selected'].get('Superficie',''))]]
     t=Table(rows, colWidths=[180,300]); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#0f6fff')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.5,colors.grey),('PADDING',(0,0),(-1,-1),7)])); story.append(t)
@@ -1452,30 +1465,78 @@ with p3:
 
 with pclima:
     st.subheader("Temperatura del sitio y evaluación climática")
-    st.caption("El Tomo I indica que el módulo de la mezcla asfáltica debe considerar la temperatura de exposición. El Tomo II utilizó datos históricos de estaciones del IMN y modelos de conversión de temperatura del aire a temperatura del pavimento.")
+    st.caption("Admite clima documentado por estación o una serie de 12 temperaturas medias mensuales. Las ecuaciones térmicas GDP existentes se aplican sin modificación.")
+
+    climate_input_mode = st.segmented_control(
+        "Modo de información climática",
+        ["Estación documentada", "Valores mensuales"],
+        default="Estación documentada",
+        key="climate_input_mode",
+    ) or "Estación documentada"
+
     c1, c2, c3 = st.columns(3)
     with c1:
-        climate_source = st.selectbox("Fuente climática", ["Estación considerada en Tomo II", "Otra / dato propio"])
+        climate_source = st.text_input("Fuente / institución", value="IMN / fuente documentada")
+        climate_period = st.text_input("Periodo documentado", value="")
         station_selected = st.selectbox("Estación o zona representativa", CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"], index=6)
     with c2:
-        air_temp_c = st.number_input("Temperatura promedio del aire (°C)", min_value=-10.0, max_value=50.0, value=24.0, step=0.1)
         depth_mm = st.number_input("Profundidad de evaluación en la mezcla (mm)", min_value=1.0, max_value=500.0, value=35.0, step=1.0, help="Se recomienda evaluar aproximadamente a la profundidad media de la capa asfáltica.")
-    with c3:
         analysis_category = st.selectbox("Categoría de análisis del Tomo I", [1,2,3], index=2)
+    with c3:
         temp_data_confirmed = st.checkbox("Fuente y periodo climático documentados", value=False)
         master_curve_confirmed = st.checkbox("Curva maestra / módulos a varias temperaturas disponibles", value=False)
+        climate_notes = st.text_area("Notas de trazabilidad climática", value="", height=90)
+
+    climate_monthly_df = pd.DataFrame()
+    monthly_values = []
+    if climate_input_mode == "Valores mensuales":
+        st.markdown("#### Temperaturas medias mensuales del aire")
+        default_monthly = [23.0, 23.5, 24.0, 24.5, 24.0, 23.5, 23.5, 23.5, 23.5, 23.0, 22.8, 22.8]
+        monthly_input = pd.DataFrame({"Mes": MONTHS_ES, "Temperatura media del aire (°C)": default_monthly})
+        monthly_editor = st.data_editor(
+            monthly_input,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            key="climate_monthly_editor",
+            column_config={
+                "Mes": st.column_config.TextColumn("Mes", disabled=True),
+                "Temperatura media del aire (°C)": st.column_config.NumberColumn(
+                    "Temperatura media del aire (°C)", min_value=-20.0, max_value=60.0, step=0.1, format="%.1f"
+                ),
+            },
+        )
+        monthly_values = pd.to_numeric(monthly_editor["Temperatura media del aire (°C)"], errors="coerce").fillna(0.0).tolist()
+        air_temp_c = representative_temperature(monthly_values)
+        climate_monthly_df = monthly_climate_table(monthly_values, latitude, depth_mm, pavement_temperature_ltpp, pavement_temperature_shrp)
+        summary = monthly_summary(climate_monthly_df)
+        st.dataframe(climate_monthly_df, use_container_width=True, hide_index=True)
+        st.line_chart(climate_monthly_df.set_index("Mes")[["Aire (°C)", "Pavimento LTPP (°C)", "Pavimento SHRP (°C)"]])
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Aire medio anual", f"{summary['air_mean_c']:.1f} °C")
+        s2.metric("Aire mínimo mensual", f"{summary['air_min_c']:.1f} °C")
+        s3.metric("Aire máximo mensual", f"{summary['air_max_c']:.1f} °C")
+        s4.metric("Rango mensual", f"{summary['air_max_c']-summary['air_min_c']:.1f} °C")
+    else:
+        air_temp_c = st.number_input("Temperatura representativa del aire (°C)", min_value=-10.0, max_value=50.0, value=24.0, step=0.1)
+        st.info("Modo estación: documente la estación, institución y periodo. El valor representativo ingresado se usa directamente en las ecuaciones térmicas.")
 
     tp_ltpp = pavement_temperature_ltpp(air_temp_c, latitude, depth_mm)
     tp_shrp = pavement_temperature_shrp(air_temp_c, latitude, depth_mm)
     pavement_temp_c = tp_ltpp
     a1,a2,a3,a4=st.columns(4)
-    a1.metric("Temperatura del aire", f"{air_temp_c:.1f} °C")
+    a1.metric("Temperatura representativa del aire", f"{air_temp_c:.1f} °C")
     a2.metric("Pavimento — LTPP", f"{tp_ltpp:.1f} °C")
     a3.metric("Pavimento — SHRP", f"{tp_shrp:.1f} °C")
     a4.metric("Profundidad evaluada", f"{depth_mm:.0f} mm")
 
+    st.markdown("#### Trazabilidad climática")
+    st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
+
     st.markdown("#### Alertas de cumplimiento y revisión")
     climate_checks = climate_alerts(st.session_state.active_tomo, pavement_type, air_temp_c, pavement_temp_c, latitude, depth_mm, analysis_category, temp_data_confirmed, master_curve_confirmed, station_selected)
+    if climate_input_mode == "Valores mensuales" and len(monthly_values) == 12 and temp_data_confirmed:
+        climate_checks.append(("success", "Serie mensual completa: 12 valores documentados y procesados."))
     for level,msg in climate_checks:
         getattr(st, level)(msg)
     st.info("Referencia incorporada: GDP-2024 Tomo I, Sección 303.01, ecuaciones 303-01 a 303-04; GDP-2024 Tomo II, Anexo B.3 sobre temperatura del pavimento y estaciones climáticas consideradas.")
@@ -1885,7 +1946,21 @@ with p6:
             "class": tclass,
         },
         "subgrade": {"cbr": cbr_design, "class": sclass, "mr": mr},
-        "climate": {"station": station_selected, "air_c": air_temp_c, "pavement_ltpp_c": tp_ltpp, "pavement_shrp_c": tp_shrp, "latitude": latitude, "depth_mm": depth_mm, "alerts": [m for _,m in climate_checks]},
+        "climate": {
+            "input_mode": climate_input_mode,
+            "source": climate_source,
+            "period": climate_period,
+            "station": station_selected,
+            "notes": climate_notes,
+            "air_c": air_temp_c,
+            "pavement_ltpp_c": tp_ltpp,
+            "pavement_shrp_c": tp_shrp,
+            "latitude": latitude,
+            "depth_mm": depth_mm,
+            "monthly_air_c": monthly_values,
+            "monthly_table": climate_monthly_df.to_dict(orient="records") if not climate_monthly_df.empty else [],
+            "alerts": [m for _,m in climate_checks],
+        },
         "active_tomo": active_tomo,
         "selected": selected_row,
         "gdp_tomo2": st.session_state.get("tomo2_result", {}) if active_tomo == "Tomo II" else {},
