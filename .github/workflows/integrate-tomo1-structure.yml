@@ -1,0 +1,59 @@
+name: Integrar estructura Tomo I y 3D deterioro
+
+on:
+  push:
+    branches:
+      - agent/tomo1-estructura-deterioro
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tomo1-estructura-deterioro
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración Tomo I
+        run: python tools/integrate_tomo1_structure.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar contrato Tomo I y 3D
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('app.py').read_text(encoding='utf-8')
+          required = [
+              'Estructura propuesta para evaluación — GDP-2024 Tomo I',
+              'tomo1_structure',
+              'Base_estabilizada_cm',
+              'Mejoramiento_subrasante_cm',
+              'Visor estructural 3D v2 — Tomo I',
+              'Modelo 3D del deterioro del pavimento',
+              'sección propuesta para evaluación',
+              'Decreto Ejecutivo 44762-MOPT',
+          ]
+          missing = [x for x in required if x not in s]
+          if missing:
+              raise SystemExit(f'Faltan elementos: {missing}')
+          if 'Active Tomo II para obtener una alternativa de catálogo' in s:
+              raise SystemExit('Permanece el bloqueo antiguo de Tomo I')
+          print('Contrato Tomo I + 3D verificado')
+          PY
+      - name: Guardar app.py integrado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- app.py; then
+            echo "Sin cambios en app.py"
+          else
+            git add app.py
+            git commit -m "Integrar estructura Tomo I y restaurar 3D de deterioro"
+            git push
+          fi
