@@ -1,0 +1,56 @@
+name: Integrar pickup y carga liviana
+
+on:
+  push:
+    branches:
+      - agent/pickup-carga-liviana
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración de tránsito
+        run: python tools/integrate_pickup_light_traffic.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar contrato de tránsito
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('app.py').read_text(encoding='utf-8')
+          checks = [
+              'Pickup / carga liviana',
+              'Grupo de tránsito',
+              'eq("pesado")',
+              'Automóviles / vehículos livianos',
+              'Carga liviana',
+              'no se asigna un factor normativo universal',
+          ]
+          missing = [x for x in checks if x not in s]
+          if missing:
+              raise SystemExit(f'Faltan elementos de contrato: {missing}')
+          if 'heavy_mask = vehicles["Categoría"].str.lower().ne("vehículos livianos")' in s:
+              raise SystemExit('Permanece la lógica antigua de pesados')
+          print('Contrato de tránsito verificado')
+          PY
+      - name: Guardar app.py integrado
+        run: |
+          if git diff --quiet -- app.py; then
+            echo "Sin cambios pendientes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git commit -m "Integrar pickup y carga liviana en tránsito"
+          git push
