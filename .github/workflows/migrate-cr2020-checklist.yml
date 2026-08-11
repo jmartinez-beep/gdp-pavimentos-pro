@@ -1,0 +1,67 @@
+name: Migrar checklist a CR-2020
+
+on:
+  push:
+    branches:
+      - agent/migrar-checklist-cr2020
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'cr2020_asphalt.py'
+      - 'tools/migrate_cr2020_checklist.py'
+      - '.github/workflows/migrate-cr2020-checklist.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  migrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar migración
+        run: python tools/migrate_cr2020_checklist.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py cr2020_asphalt.py
+      - name: Verificar contrato CR-2020
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          app = Path('app.py').read_text(encoding='utf-8')
+          mod = Path('cr2020_asphalt.py').read_text(encoding='utf-8')
+          for item in [
+              '13. Control CR-2020',
+              'render_asphalt_cr2020_checklist(project_name)',
+              'asphalt_cr2020',
+              'Control_CR2020',
+              'Checklist_CR2020',
+          ]:
+              assert item in app, item
+          for item in [
+              'CR-2020 — vigente',
+              '43397-MOPT',
+              'Sección 414',
+              'Sección 413 queda reservada',
+              'Origen del criterio',
+              'Especificación particular',
+              'Documento del proyecto',
+          ]:
+              assert item in mod, item
+          assert 'CR-2020 Sección 413' not in mod, 'CR-2020 no debe usar 413 para imprimación'
+          print('Contrato de migración CR-2020 verificado.')
+          PY
+      - name: Guardar app.py migrado
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Migrar interfaz a CR-2020"
+            git push
+          fi
