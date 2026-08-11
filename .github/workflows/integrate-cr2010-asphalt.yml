@@ -1,0 +1,68 @@
+name: Integrar checklist CR-2010 asfaltos
+
+on:
+  push:
+    branches:
+      - agent/checklist-cr2010-asfaltos
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'cr2010_asphalt.py'
+      - 'tools/integrate_cr2010_asphalt.py'
+      - '.github/workflows/integrate-cr2010-asphalt.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración CR-2010
+        run: python tools/integrate_cr2010_asphalt.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py cr2010_asphalt.py
+      - name: Verificar contrato de interfaz
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('app.py').read_text(encoding='utf-8')
+          required = [
+              '13. Control CR-2010',
+              'render_asphalt_cr2010_checklist(project_name)',
+              'asphalt_cr2010',
+              'Control_CR2010',
+              'Checklist_CR2010',
+              'Control asfáltico CR-2010 revisado',
+          ]
+          for item in required:
+              assert item in text, item
+          checklist = Path('cr2010_asphalt.py').read_text(encoding='utf-8')
+          for item in [
+              'Temperatura de inicio de compactación',
+              '125.0',
+              'Compactación completada antes de alcanzar 85 °C',
+              'Densidad en sitio entre 92% y 94%',
+              'Espesor colocado ≥ 3 × NMAS',
+              'Apertura recomendada con mezcla ≤ 70 °C',
+              'Ningún valor individual MRI > 3,0 m/km',
+          ]:
+              assert item in checklist, item
+          print('Contrato del checklist CR-2010 verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar checklist CR-2010 asfaltos"
+            git push
+          fi
