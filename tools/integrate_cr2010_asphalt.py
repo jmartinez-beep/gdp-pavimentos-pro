@@ -32,8 +32,8 @@ replace_once(
 )
 
 replace_once(
-    '''        pd.DataFrame([payload.get("climate", {})]).to_excel(writer, sheet_name="Clima", index=False)\n        alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)\n''',
-    '''        pd.DataFrame([payload.get("climate", {})]).to_excel(writer, sheet_name="Clima", index=False)\n        asphalt_control = payload.get("asphalt_cr2010", {})\n        if asphalt_control:\n            pd.DataFrame([{k:v for k,v in asphalt_control.items() if k != "checks"}]).to_excel(writer, sheet_name="Control_CR2010", index=False)\n            pd.DataFrame(asphalt_control.get("checks", [])).to_excel(writer, sheet_name="Checklist_CR2010", index=False)\n        alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)\n''',
+    '''        if monthly_rows:\n            pd.DataFrame(monthly_rows).to_excel(writer, sheet_name="Clima_mensual", index=False)\n        alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)\n''',
+    '''        if monthly_rows:\n            pd.DataFrame(monthly_rows).to_excel(writer, sheet_name="Clima_mensual", index=False)\n        asphalt_control = payload.get("asphalt_cr2010", {})\n        if asphalt_control:\n            pd.DataFrame([{k:v for k,v in asphalt_control.items() if k != "checks"}]).to_excel(writer, sheet_name="Control_CR2010", index=False)\n            pd.DataFrame(asphalt_control.get("checks", [])).to_excel(writer, sheet_name="Checklist_CR2010", index=False)\n        alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)\n''',
     'exportación Excel CR-2010',
 )
 
