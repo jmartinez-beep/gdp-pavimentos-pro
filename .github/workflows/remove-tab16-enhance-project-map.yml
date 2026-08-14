@@ -1,0 +1,49 @@
+name: Consolidar mapa en Proyecto
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/remove_tab16_enhance_project_map.py'
+      - '.github/workflows/remove-tab16-enhance-project-map.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración
+        run: python tools/remove_tab16_enhance_project_map.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar mapa consolidado
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          assert '# PROJECT_MAP_CONSOLIDATED' in t
+          assert 'Mapa e inventario geográfico del proyecto' in t
+          assert 'Descargar puntos KML para Google Earth' in t
+          assert 'Abrir punto principal en Google Maps' in t
+          assert 'with pmap:' not in t
+          assert '16. Mapa / Google Earth' not in t
+          assert ', pmap = st.tabs([' not in t
+          print('Pestaña 16 eliminada y mapa de Proyecto mejorado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Eliminar pestaña 16 y mejorar mapa de Proyecto"
+            git push
+          fi
