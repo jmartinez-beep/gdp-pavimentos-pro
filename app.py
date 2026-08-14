@@ -3768,27 +3768,33 @@ with p6:
     st.warning("La aplicación no sustituye la memoria de cálculo firmada. En Tomo II la selección se obtiene de las tablas GDP-2024 integradas; aun así deben verificarse estudios, materiales, drenaje, condiciones particulares y criterio profesional responsable.")
 
 with pmap:
-    st.subheader("Mapa del proyecto / Google Earth")
-    st.caption("Las coordenadas principales se toman automáticamente de 1. Proyecto. Puede agregar P1, P2, sondeos, puentes, alcantarillas, inicio/fin y otros elementos sin modificar la coordenada central.")
+    # TECHNICAL_GIS_VIEWER
+    st.subheader("Visor GIS técnico del expediente")
+    st.caption("Esta pestaña concentra la lectura territorial del diseño: puntos, sondeos, obras, eje, tramos homogéneos, estado técnico y exportación KML. La pestaña Proyecto conserva únicamente el mapa básico de ubicación.")
 
     map_lat = float(latitude)
     map_lon = float(longitude)
     map_e = float(crtm_easting)
     map_n = float(crtm_northing)
 
-    mp1, mp2, mp3, mp4 = st.columns(4)
-    mp1.metric("Este CRTM05", f"{map_e:,.3f} m")
-    mp2.metric("Norte CRTM05", f"{map_n:,.3f} m")
-    mp3.metric("Latitud WGS84", f"{map_lat:.7f}°")
-    mp4.metric("Longitud WGS84", f"{map_lon:.7f}°")
+    # ---------------- Capas ----------------
+    st.markdown("#### Capas geográficas")
+    ly1, ly2, ly3, ly4, ly5 = st.columns(5)
+    show_project_point = ly1.checkbox("Punto central", value=True, key='gis_layer_project')
+    show_boreholes = ly2.checkbox("Sondeos", value=True, key='gis_layer_boreholes')
+    show_works = ly3.checkbox("Obras / drenaje", value=True, key='gis_layer_works')
+    show_axis = ly4.checkbox("Eje del proyecto", value=True, key='gis_layer_axis')
+    show_segments = ly5.checkbox("Tramos homogéneos", value=True, key='gis_layer_segments')
 
-    st.markdown("#### Inventario geográfico del proyecto")
-    st.caption("Agregue filas para sondeos, P1/P2, puentes, alcantarillas, accesos u otros elementos. Puede ingresar CRTM05 o WGS84 por fila.")
+    # ---------------- Inventario de puntos ----------------
     default_geo_points = pd.DataFrame([{
         'Nombre': 'Punto central del proyecto', 'Tipo': 'Proyecto', 'Sistema': 'WGS84',
         'Este_CRTM05': map_e, 'Norte_CRTM05': map_n, 'Latitud': map_lat, 'Longitud': map_lon,
-        'Descripción': location,
+        'Estación_m': 0.0, 'CBR_%': float(cbr_design), 'Mr_MPa': float(mr),
+        'Estado': 'Referencia', 'Descripción': location,
     }])
+    st.markdown("#### Inventario de elementos")
+    st.caption("Agregue P1, P2, sondeos, puentes, alcantarillas, accesos u otros elementos. Puede usar CRTM05 o WGS84 por fila.")
     geo_points_input = st.data_editor(
         st.session_state.get('geo_project_points_input', default_geo_points),
         num_rows='dynamic', use_container_width=True, hide_index=True, key='geo_project_points_editor',
@@ -3800,6 +3806,10 @@ with pmap:
             'Norte_CRTM05': st.column_config.NumberColumn('Norte CRTM05', format='%.3f'),
             'Latitud': st.column_config.NumberColumn('Latitud WGS84', format='%.7f'),
             'Longitud': st.column_config.NumberColumn('Longitud WGS84', format='%.7f'),
+            'Estación_m': st.column_config.NumberColumn('Estación (m)', format='%.2f'),
+            'CBR_%': st.column_config.NumberColumn('CBR (%)', format='%.2f'),
+            'Mr_MPa': st.column_config.NumberColumn('Mr (MPa)', format='%.2f'),
+            'Estado': st.column_config.SelectboxColumn('Estado', options=['Referencia','Cumple','Revisar','No cumple']),
             'Descripción': st.column_config.TextColumn('Descripción'),
         },
     )
@@ -3823,77 +3833,148 @@ with pmap:
             e = n = lat = lon = 0.0; valid = False
         resolved_points.append({
             'name': name, 'type': ptype, 'system_input': system, 'description': desc,
+            'station_m': float(row.get('Estación_m',0) or 0),
+            'cbr_pct': float(row.get('CBR_%',0) or 0), 'mr_mpa': float(row.get('Mr_MPa',0) or 0),
+            'status': str(row.get('Estado','Referencia') or 'Referencia'),
             'crtm_easting': float(e), 'crtm_northing': float(n), 'latitude': float(lat), 'longitude': float(lon), 'valid': valid,
         })
 
-    resolved_df = pd.DataFrame([{
-        'Nombre':p['name'],'Tipo':p['type'],'Este CRTM05':p['crtm_easting'],'Norte CRTM05':p['crtm_northing'],
-        'Latitud':p['latitude'],'Longitud':p['longitude'],'Estado':'OK' if p['valid'] else 'Revisar'
-    } for p in resolved_points])
-    if not resolved_df.empty:
-        st.dataframe(resolved_df, use_container_width=True, hide_index=True)
-
     valid_points = [p for p in resolved_points if p['valid']]
-    if valid_points:
-        map_df = pd.DataFrame({'lat':[p['latitude'] for p in valid_points], 'lon':[p['longitude'] for p in valid_points], 'Punto':[p['name'] for p in valid_points]})
-        st.map(map_df, latitude='lat', longitude='lon', zoom=15)
-    else:
-        st.error("No hay puntos geográficos válidos para mostrar. Revise coordenadas y sistema de entrada.")
 
-    st.markdown("#### Eje y tramos homogéneos")
-    axis1, axis2, axis3, axis4 = st.columns(4)
-    axis_start_lat = axis1.number_input('Latitud inicio eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_start_lat', map_lat)), format='%.7f', key='map_axis_start_lat')
-    axis_start_lon = axis2.number_input('Longitud inicio eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_start_lon', map_lon)), format='%.7f', key='map_axis_start_lon')
-    axis_end_lat = axis3.number_input('Latitud fin eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_end_lat', map_lat)), format='%.7f', key='map_axis_end_lat')
-    axis_end_lon = axis4.number_input('Longitud fin eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_end_lon', map_lon)), format='%.7f', key='map_axis_end_lon')
-    include_segments = st.checkbox('Incluir tramos homogéneos proyectados sobre este eje recto de referencia', value=True, key='map_include_segments')
-    st.caption("Los tramos se interpolan linealmente entre inicio y fin usando sus estaciones en metros. Es una representación GIS de referencia, no sustituye el alineamiento topográfico real.")
+    # ---------------- Eje y tramos ----------------
+    st.markdown("#### Eje de referencia y tramos")
+    ax1, ax2, ax3, ax4 = st.columns(4)
+    axis_start_lat = ax1.number_input('Latitud inicio eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_start_lat', map_lat)), format='%.7f', key='map_axis_start_lat')
+    axis_start_lon = ax2.number_input('Longitud inicio eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_start_lon', map_lon)), format='%.7f', key='map_axis_start_lon')
+    axis_end_lat = ax3.number_input('Latitud fin eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_end_lat', map_lat)), format='%.7f', key='map_axis_end_lat')
+    axis_end_lon = ax4.number_input('Longitud fin eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_end_lon', map_lon)), format='%.7f', key='map_axis_end_lon')
+    st.caption("Los tramos homogéneos se proyectan linealmente sobre este eje de referencia. Para geometría definitiva use el alineamiento topográfico/GIS real.")
 
     project_lines = []
-    if is_plausible_costa_rica_wgs84(axis_start_lon, axis_start_lat) and is_plausible_costa_rica_wgs84(axis_end_lon, axis_end_lat) and (abs(axis_start_lon-axis_end_lon)>1e-12 or abs(axis_start_lat-axis_end_lat)>1e-12):
-        project_lines.append({'name':'Eje de referencia','description':'Eje recto de referencia definido en GDP Pavimentos Pro','coordinates':[(axis_start_lon,axis_start_lat),(axis_end_lon,axis_end_lat)]})
-        if include_segments:
-            total_len = max(float(project_length_m), 1e-9)
-            for seg in st.session_state.get('homogeneous_segments', []):
-                ini = float(seg.get('Inicio_m',0) or 0); fin = float(seg.get('Fin_m',0) or 0)
-                p0 = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, ini/total_len)
-                p1s = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, fin/total_len)
-                project_lines.append({
-                    'name':str(seg.get('Tramo','Tramo homogéneo')),
-                    'description':f"Estaciones {ini:.2f}–{fin:.2f} m | CBR {float(seg.get('CBR_%',0) or 0):.2f}% | Mr {float(seg.get('Mr_MPa',0) or 0):.2f} MPa",
-                    'coordinates':[p0,p1s],
-                })
+    segments_for_gis = []
+    axis_valid = (
+        is_plausible_costa_rica_wgs84(axis_start_lon, axis_start_lat) and
+        is_plausible_costa_rica_wgs84(axis_end_lon, axis_end_lat) and
+        (abs(axis_start_lon-axis_end_lon)>1e-12 or abs(axis_start_lat-axis_end_lat)>1e-12)
+    )
+    if axis_valid:
+        project_lines.append({'name':'Eje de referencia','description':'Eje recto de referencia','coordinates':[(axis_start_lon,axis_start_lat),(axis_end_lon,axis_end_lat)]})
+        total_len = max(float(project_length_m), 1e-9)
+        for i, seg in enumerate(st.session_state.get('homogeneous_segments', []), start=1):
+            ini = float(seg.get('Inicio_m', seg.get('Inicio', 0)) or 0)
+            fin = float(seg.get('Fin_m', seg.get('Fin', 0)) or 0)
+            cbr_seg = float(seg.get('CBR_%', seg.get('CBR', cbr_design)) or cbr_design)
+            mr_seg = float(seg.get('Mr_MPa', seg.get('Mr', mr)) or mr)
+            seg_name = str(seg.get('Tramo', seg.get('Código', f'TH-{i:02d}')))
+            p0 = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, ini/total_len)
+            p1s = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, fin/total_len)
+            # Estado técnico simple y explícito para visualización. No sustituye Validación.
+            if cbr_seg < 3.0:
+                status = 'No cumple'
+            elif cbr_seg < 5.0:
+                status = 'Revisar'
+            else:
+                status = 'Cumple'
+            segments_for_gis.append({
+                'name':seg_name,'start_m':ini,'end_m':fin,'length_m':max(fin-ini,0.0),
+                'cbr_pct':cbr_seg,'mr_mpa':mr_seg,'status':status,'coordinates':[p0,p1s],
+                'structure':str(seg.get('Estructura', seg.get('Alternativa', selected_row.get('Código','') if selected_row else ''))),
+            })
+            project_lines.append({'name':seg_name,'description':f"{ini:.2f}-{fin:.2f} m | CBR {cbr_seg:.2f}% | Mr {mr_seg:.2f} MPa | {status}",'coordinates':[p0,p1s]})
+
+    # ---------------- Visor Plotly GIS ----------------
+    st.markdown("#### Visor geoespacial")
+    fig_gis = go.Figure()
+    point_groups = {
+        'Proyecto': show_project_point, 'Inicio': show_project_point, 'Fin': show_project_point,
+        'Sondeo P1': show_boreholes, 'Sondeo P2': show_boreholes, 'Sondeo': show_boreholes,
+        'Puente': show_works, 'Alcantarilla': show_works, 'Intersección': show_works, 'Acceso': show_works, 'Otro': show_works,
+    }
+    status_colors = {'Cumple':'green','Revisar':'orange','No cumple':'red','Referencia':'blue'}
+    visible_points = [p for p in valid_points if point_groups.get(p['type'], True)]
+    for status in ['Referencia','Cumple','Revisar','No cumple']:
+        pts = [p for p in visible_points if p['status'] == status]
+        if pts:
+            fig_gis.add_trace(go.Scattermapbox(
+                lat=[p['latitude'] for p in pts], lon=[p['longitude'] for p in pts], mode='markers+text',
+                text=[p['name'] for p in pts], textposition='top right', name=f'Puntos · {status}',
+                marker=dict(size=13, color=status_colors[status]),
+                customdata=[[p['type'],p['station_m'],p['cbr_pct'],p['mr_mpa'],p['description']] for p in pts],
+                hovertemplate='<b>%{text}</b><br>Tipo: %{customdata[0]}<br>Est.: %{customdata[1]:.2f} m<br>CBR: %{customdata[2]:.2f}%<br>Mr: %{customdata[3]:.2f} MPa<br>%{customdata[4]}<extra></extra>'
+            ))
+    if show_axis and axis_valid:
+        fig_gis.add_trace(go.Scattermapbox(lat=[axis_start_lat,axis_end_lat], lon=[axis_start_lon,axis_end_lon], mode='lines', name='Eje', line=dict(width=5, color='blue'), hoverinfo='name'))
+    if show_segments:
+        for seg in segments_for_gis:
+            coords = seg['coordinates']
+            fig_gis.add_trace(go.Scattermapbox(
+                lat=[coords[0][1],coords[1][1]], lon=[coords[0][0],coords[1][0]], mode='lines',
+                name=f"{seg['name']} · {seg['status']}", line=dict(width=9, color=status_colors[seg['status']]),
+                customdata=[[seg['start_m'],seg['end_m'],seg['cbr_pct'],seg['mr_mpa'],seg['structure']]]*2,
+                hovertemplate='<b>'+seg['name']+'</b><br>Est.: %{customdata[0]:.2f}–%{customdata[1]:.2f} m<br>CBR: %{customdata[2]:.2f}%<br>Mr: %{customdata[3]:.2f} MPa<br>Estructura: %{customdata[4]}<extra></extra>'
+            ))
+    center_lat = sum(p['latitude'] for p in valid_points)/len(valid_points) if valid_points else map_lat
+    center_lon = sum(p['longitude'] for p in valid_points)/len(valid_points) if valid_points else map_lon
+    fig_gis.update_layout(
+        mapbox=dict(style='open-street-map', center=dict(lat=center_lat,lon=center_lon), zoom=14),
+        height=620, margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation='h'),
+    )
+    st.plotly_chart(fig_gis, use_container_width=True, config={'displaylogo':False})
+    st.caption("Leyenda de estado: verde = cumple, amarillo/naranja = revisar, rojo = no cumple, azul = referencia. El color de tramos se basa en un control GIS preliminar de CBR y no sustituye la pestaña Validación.")
+
+    # ---------------- Tabla GIS consolidada ----------------
+    point_rows = [{
+        'Elemento':p['name'],'Tipo':p['type'],'Estación':p['station_m'],'CBR':p['cbr_pct'],'Mr':p['mr_mpa'],
+        'Estado':p['status'],'Estructura':'','Latitud':p['latitude'],'Longitud':p['longitude']
+    } for p in valid_points]
+    segment_rows = [{
+        'Elemento':s['name'],'Tipo':'Tramo homogéneo','Estación':f"{s['start_m']:.2f}-{s['end_m']:.2f}",
+        'CBR':s['cbr_pct'],'Mr':s['mr_mpa'],'Estado':s['status'],'Estructura':s['structure'],
+        'Latitud':(s['coordinates'][0][1]+s['coordinates'][1][1])/2,
+        'Longitud':(s['coordinates'][0][0]+s['coordinates'][1][0])/2,
+    } for s in segments_for_gis]
+    gis_table = pd.DataFrame(point_rows + segment_rows)
+    st.markdown("#### Tabla GIS del expediente")
+    if not gis_table.empty:
+        st.dataframe(gis_table, use_container_width=True, hide_index=True)
     else:
-        st.info("Defina coordenadas distintas de inicio y fin para generar el eje y los tramos como líneas en Google Earth.")
+        st.info("Agregue puntos o defina un eje con tramos para construir la tabla GIS.")
 
-    st.markdown("#### Abrir ubicación principal")
+    # ---------------- Ficha técnica ----------------
+    st.markdown("#### Ficha técnica del elemento")
+    element_options = [r['Elemento'] for r in point_rows + segment_rows]
+    if element_options:
+        selected_gis_element = st.selectbox('Elemento a inspeccionar', element_options, key='gis_selected_element')
+        record = next(r for r in point_rows + segment_rows if r['Elemento'] == selected_gis_element)
+        fc1,fc2,fc3,fc4 = st.columns(4)
+        fc1.metric('Tipo', str(record['Tipo']))
+        fc2.metric('Estado', str(record['Estado']))
+        fc3.metric('CBR', f"{float(record['CBR']):.2f}%")
+        fc4.metric('Mr', f"{float(record['Mr']):.2f} MPa")
+        st.write(f"**Estación:** {record['Estación']}  |  **Estructura:** {record['Estructura'] or 'No asignada'}")
+        st.write(f"**WGS84:** {float(record['Latitud']):.7f}, {float(record['Longitud']):.7f}")
+        selected_maps_url = f"https://www.google.com/maps/search/?api=1&query={float(record['Latitud']):.8f},{float(record['Longitud']):.8f}"
+        st.link_button('🌎 Abrir elemento en Google Maps', selected_maps_url, use_container_width=True)
+
+    # ---------------- Exportación KML ----------------
+    st.markdown("#### Google Earth / KML")
     google_maps_url = f"https://www.google.com/maps/search/?api=1&query={map_lat:.8f},{map_lon:.8f}"
-    gm1, gm2 = st.columns(2)
-    gm1.link_button("🌎 Abrir punto central en Google Maps", google_maps_url, use_container_width=True)
-    gm2.markdown(f"**Coordenadas Google Earth:** `{map_lat:.8f}, {map_lon:.8f}`")
-
-    st.markdown("#### Exportar proyecto completo a Google Earth")
     safe_project_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in str(project_name)).strip('_') or 'Proyecto_GDP'
     full_kml = project_features_kml(project_name, resolved_points, project_lines)
-    st.download_button(
-        "⬇️ Descargar KML completo del proyecto", data=full_kml.encode('utf-8'),
-        file_name=f"{safe_project_name}_proyecto_completo.kml", mime='application/vnd.google-earth.kml+xml', use_container_width=True,
+    exg1,exg2 = st.columns(2)
+    exg1.link_button("🌎 Abrir punto central en Google Maps", google_maps_url, use_container_width=True)
+    exg2.download_button(
+        "⬇️ Descargar KML técnico completo", data=full_kml.encode('utf-8'),
+        file_name=f"{safe_project_name}_visor_gis.kml", mime='application/vnd.google-earth.kml+xml', use_container_width=True,
     )
 
-    st.markdown("#### Resumen geográfico")
-    geo_summary = pd.DataFrame([{
-        'Proyecto':project_name,'Tomo':active_tomo,'Puntos válidos':len(valid_points),
-        'Líneas / tramos':len(project_lines),'CRTM05 central E':map_e,'CRTM05 central N':map_n,
-        'Latitud central':map_lat,'Longitud central':map_lon,
-    }])
-    st.dataframe(geo_summary, use_container_width=True, hide_index=True)
     st.session_state.project_map = {
         'latitude':map_lat,'longitude':map_lon,'crtm_easting':map_e,'crtm_northing':map_n,
-        'google_maps_url':google_maps_url,'kml_filename':f"{safe_project_name}_proyecto_completo.kml",
-        'points':resolved_points,'lines':project_lines,
+        'google_maps_url':google_maps_url,'kml_filename':f"{safe_project_name}_visor_gis.kml",
+        'points':resolved_points,'lines':project_lines,'segments':segments_for_gis,
         'axis':{'start_lat':axis_start_lat,'start_lon':axis_start_lon,'end_lat':axis_end_lat,'end_lon':axis_end_lon},
+        'gis_table':gis_table.to_dict(orient='records') if not gis_table.empty else [],
     }
-
 
 
 with pdash:
