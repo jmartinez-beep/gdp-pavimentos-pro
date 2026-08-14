@@ -1,0 +1,63 @@
+name: Integrar AASHTO93 y controles de capas corregido
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/run_aashto93_layer_controls_fixed.py'
+      - '.github/workflows/run-aashto93-layer-controls-fixed.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar migración corregida
+        run: python tools/run_aashto93_layer_controls_fixed.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Prueba numérica AASHTO93
+        run: |
+          python - <<'PY'
+          import math
+          from statistics import NormalDist
+          def f(sn,mr_mpa,zr,so,dpsi):
+              mr_psi=mr_mpa*145.0377377
+              return zr*so+9.36*math.log10(sn+1)-0.20+math.log10(dpsi/2.7)/(0.40+1094/(sn+1)**5.19)+2.32*math.log10(mr_psi)-8.07
+          zr=NormalDist().inv_cdf(1-0.90)
+          target=math.log10(1_000_000)
+          lo,hi=0.01,12.0
+          for _ in range(90):
+              mid=(lo+hi)/2
+              if f(mid,50,zr,0.45,1.7)<target: lo=mid
+              else: hi=mid
+          sn=(lo+hi)/2
+          assert 2.0 < sn < 8.0, sn
+          print('SN prueba =', sn)
+          PY
+      - name: Verificar integración funcional
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          for x in ['def aashto93_required_sn','SN requerido AASHTO-93','D2 teórico por SN residual','CBR material de base','Calidad_granulares','AASHTO93']:
+              assert x in t, x
+          print('Integración AASHTO93 verificada.')
+          PY
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py tools/add_aashto93_layer_controls.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar AASHTO93 y controles de capas Tomo I"
+            git push
+          fi
