@@ -1,0 +1,55 @@
+name: Actualizar visor GIS técnico
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/upgrade_map_to_technical_gis_viewer.py'
+      - '.github/workflows/upgrade-map-technical-gis.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración
+        run: python tools/upgrade_map_to_technical_gis_viewer.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar visor GIS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+              '# TECHNICAL_GIS_VIEWER',
+              'Capas geográficas',
+              'Visor geoespacial',
+              'Tabla GIS del expediente',
+              'Ficha técnica del elemento',
+              'Descargar KML técnico completo',
+              "show_segments = ly5.checkbox",
+              "Scattermapbox",
+              "status_colors = {'Cumple':'green','Revisar':'orange','No cumple':'red','Referencia':'blue'}",
+          ]
+          for x in required:
+              assert x in t, x
+          print('Visor GIS técnico verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Convertir mapa en visor GIS técnico"
+            git push
+          fi
