@@ -1513,7 +1513,13 @@ def make_report(payload: Dict) -> str:
     quality_score, quality_detail = design_data_quality_score(payload)
     costs = payload.get("costs", {})
     active_tomo = payload.get("active_tomo", "Tomo II")
-    design_category = int(traffic.get("design_category", tomo1_design_category(float(traffic.get("esal", 0.0)))))
+    # FIX_TOMO2_REPORT_DESIGN_CATEGORY_NONE
+    raw_design_category = traffic.get("design_category")
+    design_category = (
+        int(raw_design_category)
+        if raw_design_category not in (None, "")
+        else tomo1_design_category(float(traffic.get("esal", 0.0)))
+    )
     traffic_class_html = (
         f"<tr><th>Categoría de diseño Tomo I</th><td>Categoría {design_category}</td></tr>"
         if active_tomo == "Tomo I"
