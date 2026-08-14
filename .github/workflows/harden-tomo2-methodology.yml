@@ -1,0 +1,54 @@
+name: Blindar metodología Tomo II
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/harden_tomo2_methodology.py'
+      - '.github/workflows/harden-tomo2-methodology.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar blindaje Tomo II
+        run: python tools/harden_tomo2_methodology.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py gdp_tomo2.py gdp_tomo2_adapter.py
+      - name: Verificar integración Tomo II
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t = Path('app.py').read_text(encoding='utf-8')
+          required = [
+              'TOMO2_METHODOLOGY_HARDENING',
+              'Periodo de diseño Tomo II (años)',
+              'Categoría TPD — Tomo II',
+              'Categoría normativa CBR — Tomo II',
+              'Diseño estructural complementario — Tomo II',
+              'Desempeño y conservación — Tomo II',
+              'tomo2_tpd_category',
+          ]
+          for item in required:
+              assert item in t, item
+          assert 'from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct' in t
+          print('Blindaje metodológico Tomo II verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Blindar metodología Tomo II"
+            git push
+          fi
