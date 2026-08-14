@@ -244,6 +244,43 @@ def money(value: float) -> str:
     return f"₡{value:,.0f}".replace(",", " ")
 
 
+# CLIMATE_GRANULAR_MASTER_CURVE_PHASE
+def granular_resilient_modulus_mpa(k1: float, k2: float, k3: float, theta_kpa: float, tau_oct_kpa: float, pa_kpa: float = 101.325) -> float:
+    """Modelo constitutivo configurable para materiales granulares.
+
+    Mr = k1*Pa*(theta/Pa)^k2*(tau_oct/Pa + 1)^k3.
+    Las tensiones se ingresan en kPa y el resultado se devuelve en MPa.
+    Los coeficientes deben provenir del ensayo/modelo documentado aplicable.
+    """
+    pa = max(float(pa_kpa), 1e-9)
+    theta = max(float(theta_kpa), 1e-9)
+    tau = max(float(tau_oct_kpa), 0.0)
+    mr_kpa = float(k1) * pa * (theta / pa) ** float(k2) * (tau / pa + 1.0) ** float(k3)
+    return max(mr_kpa / 1000.0, 0.0)
+
+
+def wlf_log10_shift_factor(temp_c: float, reference_temp_c: float, c1: float, c2: float) -> float:
+    """Factor de desplazamiento WLF configurable: log10(aT)."""
+    dt = float(temp_c) - float(reference_temp_c)
+    denom = float(c2) + dt
+    if abs(denom) < 1e-9:
+        denom = 1e-9 if denom >= 0 else -1e-9
+    return -float(c1) * dt / denom
+
+
+def master_curve_dynamic_modulus_mpa(log10_reduced_frequency: float, delta: float, alpha: float, beta: float, gamma: float) -> float:
+    """Curva maestra sigmoidal configurable en log10(E*) con E* en MPa."""
+    loge = float(delta) + float(alpha) / (1.0 + math.exp(float(beta) + float(gamma) * float(log10_reduced_frequency)))
+    return 10.0 ** loge
+
+
+def climate_ab_from_threshold(pavement_temp_c: float, threshold_c: float, orientation: str) -> str:
+    """Clasificación A/B configurable; no se presenta como umbral GDP hasta documentar la tabla aplicable."""
+    if orientation == 'A ≤ umbral; B > umbral':
+        return 'A' if float(pavement_temp_c) <= float(threshold_c) else 'B'
+    return 'B' if float(pavement_temp_c) <= float(threshold_c) else 'A'
+
+
 # AASHTO93_LAYER_CONTROLS
 def aashto93_flexible_log_w18(sn: float, mr_mpa: float, zr: float, so: float, delta_psi: float) -> float:
     """Ecuación AASHTO 1993 para pavimento flexible.
@@ -1248,6 +1285,8 @@ def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, es
     if active_tomo == "Tomo I":
         add("Materiales", "Módulo de mezcla asfáltica registrado", float(materials.get("asphalt_dynamic_modulus_mpa",0) or 0) > 0, "Alta", f"E*={float(materials.get('asphalt_dynamic_modulus_mpa',0) or 0):.0f} MPa")
         add("Materiales", "Fuente de caracterización documentada", bool(str(materials.get("source","")).strip()), "Media", str(materials.get("source","Sin definir")))
+        granular_model = materials.get('granular_model', {}) if isinstance(materials, dict) else {}
+        add("Granulares", "Modelo constitutivo documentado", bool(granular_model), "Media", str(granular_model.get('material','No configurado')))
         add("Confiabilidad", "Parámetro de confiabilidad definido", float(reliability.get("reliability_pct",0) or 0) >= 50, "Alta", f"R={float(reliability.get('reliability_pct',0) or 0):.0f}%")
         add("Respuesta ME", "Cribado mecanístico ejecutado", bool(mechanistic), "Alta", str(mechanistic.get("method", "No ejecutado")))
         if mechanistic:
@@ -2214,23 +2253,76 @@ with pclima:
     st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
 
     if st.session_state.active_tomo == "Tomo I":
-        st.markdown("#### Vínculo clima – módulo dinámico E*")
-        st.caption("Ingrese E* representativo por mes a partir de curva maestra/ensayos o procedimiento documentado. La aplicación no inventa una relación temperatura–módulo.")
+        st.markdown("#### Clasificación climática A / B — criterio documentado")
+        st.warning("La clasificación A/B queda operativa como **criterio configurable**. Antes de usarla como clasificación normativa, documente la tabla/umbral GDP aplicable al proyecto.")
+        cl1, cl2, cl3 = st.columns(3)
+        climate_ab_threshold = cl1.number_input("Umbral térmico A/B (°C)", min_value=-10.0, max_value=80.0, value=32.0, step=0.5, key='climate_ab_threshold')
+        climate_ab_orientation = cl2.selectbox("Regla A/B", ['A ≤ umbral; B > umbral', 'B ≤ umbral; A > umbral'], key='climate_ab_orientation')
+        climate_ab_source = cl3.text_input("Fuente / tabla del criterio A/B", value="Pendiente de documentar", key='climate_ab_source')
+        climate_ab = climate_ab_from_threshold(tp_ltpp, climate_ab_threshold, climate_ab_orientation)
+        st.metric("Clasificación climática", f"Clima {climate_ab}", f"Tpav LTPP = {tp_ltpp:.1f} °C")
+
+        st.markdown("#### Curva maestra y ecuación de desplazamiento de la mezcla asfáltica en caliente")
+        st.caption("Modelo sigmoidal + desplazamiento WLF configurable. Los coeficientes deben provenir de ensayos/ajuste documentado; no se presentan como coeficientes universales GDP.")
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc_delta = mc1.number_input("δ — asíntota inferior log10(E*)", value=2.5, step=0.1, key='mc_delta')
+        mc_alpha = mc2.number_input("α — amplitud sigmoidal", value=2.0, step=0.1, key='mc_alpha')
+        mc_beta = mc3.number_input("β — parámetro sigmoidal", value=0.0, step=0.1, key='mc_beta')
+        mc_gamma = mc4.number_input("γ — pendiente sigmoidal", value=-1.0, step=0.1, key='mc_gamma')
+        sh1, sh2, sh3, sh4 = st.columns(4)
+        reference_temp_c = sh1.number_input("Temperatura de referencia Tref (°C)", min_value=-20.0, max_value=80.0, value=20.0, step=1.0, key='mc_tref')
+        analysis_frequency_hz = sh2.number_input("Frecuencia de carga f (Hz)", min_value=0.0001, max_value=1000.0, value=10.0, step=1.0, key='mc_frequency')
+        wlf_c1 = sh3.number_input("WLF C1", value=8.86, step=0.1, key='mc_wlf_c1')
+        wlf_c2 = sh4.number_input("WLF C2 (°C)", value=101.6, step=1.0, key='mc_wlf_c2')
+
+        log_a_t = wlf_log10_shift_factor(tp_ltpp, reference_temp_c, wlf_c1, wlf_c2)
+        a_t = 10.0 ** log_a_t
+        reduced_frequency_hz = max(float(analysis_frequency_hz) * a_t, 1e-12)
+        log_fr = math.log10(reduced_frequency_hz)
+        e_effective = master_curve_dynamic_modulus_mpa(log_fr, mc_delta, mc_alpha, mc_beta, mc_gamma)
+        st.latex(r"\log_{10}(a_T)=-\frac{C_1(T-T_{ref})}{C_2+(T-T_{ref})}")
+        st.latex(r"f_r=f\,a_T")
+        st.latex(r"\log_{10}(E^*)=\delta+\frac{\alpha}{1+\exp(\beta+\gamma\log_{10}f_r)}")
+        mcm1, mcm2, mcm3, mcm4 = st.columns(4)
+        mcm1.metric("log10(aT)", f"{log_a_t:.3f}")
+        mcm2.metric("aT", f"{a_t:.4g}")
+        mcm3.metric("Frecuencia reducida", f"{reduced_frequency_hz:.4g} Hz")
+        mcm4.metric("E* calculado", f"{e_effective:,.0f} MPa")
+
+        curve_logs = [(-4.0 + i * 0.2) for i in range(41)]
+        curve_df = pd.DataFrame({
+            'log10(f reducida)': curve_logs,
+            'Frecuencia reducida (Hz)': [10.0 ** x for x in curve_logs],
+            'E* (MPa)': [master_curve_dynamic_modulus_mpa(x, mc_delta, mc_alpha, mc_beta, mc_gamma) for x in curve_logs],
+        })
+        curve_fig = go.Figure(go.Scatter(x=curve_df['log10(f reducida)'], y=curve_df['E* (MPa)'], mode='lines+markers'))
+        curve_fig.update_layout(height=340, title='Curva maestra E* — modelo configurable', xaxis_title='log10 frecuencia reducida (Hz)', yaxis_title='E* (MPa)', plot_bgcolor='white', paper_bgcolor='white')
+        st.plotly_chart(curve_fig, use_container_width=True, config={'displaylogo': False})
+
         temps_for_e = monthly_values if len(monthly_values) == 12 else [float(air_temp_c)] * 12
+        monthly_curve_rows = []
+        for month, temp_month in zip(MONTHS_ES, temps_for_e):
+            month_log_at = wlf_log10_shift_factor(float(temp_month), reference_temp_c, wlf_c1, wlf_c2)
+            month_at = 10.0 ** month_log_at
+            month_fr = max(float(analysis_frequency_hz) * month_at, 1e-12)
+            month_e = master_curve_dynamic_modulus_mpa(math.log10(month_fr), mc_delta, mc_alpha, mc_beta, mc_gamma)
+            monthly_curve_rows.append({'Mes': month, 'Temperatura (°C)': float(temp_month), 'log10(aT)': month_log_at, 'f reducida (Hz)': month_fr, 'E* calculado (MPa)': month_e})
+        e_monthly = pd.DataFrame(monthly_curve_rows)
+        st.dataframe(e_monthly, use_container_width=True, hide_index=True)
         e_ref_state = float(st.session_state.get('design_materials', {}).get('asphalt_dynamic_modulus_mpa', 3500.0) or 3500.0)
-        default_e_monthly = pd.DataFrame({'Mes': MONTHS_ES, 'Temperatura aire/pavimento de referencia (°C)': temps_for_e, 'E* mensual (MPa)': [e_ref_state] * 12})
-        e_monthly = st.data_editor(st.session_state.get('monthly_dynamic_modulus_input', default_e_monthly), num_rows='fixed', use_container_width=True, hide_index=True, key='monthly_dynamic_modulus_editor')
+        climate_material_factor = float(e_monthly['E* calculado (MPa)'].mean()) / max(e_ref_state, 1e-9)
         st.session_state.monthly_dynamic_modulus_input = e_monthly.copy()
-        climate_material_factor = monthly_material_climate_factor(e_monthly, e_ref_state)
         st.session_state.climate_material = {
+            'climate_class_ab': climate_ab, 'climate_ab_threshold_c': float(climate_ab_threshold),
+            'climate_ab_rule': climate_ab_orientation, 'climate_ab_source': climate_ab_source,
             'monthly_modulus': e_monthly.to_dict(orient='records'), 'reference_modulus_mpa': e_ref_state,
-            'relative_climate_factor': climate_material_factor, 'method': 'E* mensual ingresado/documentado por usuario'
+            'effective_modulus_mpa': float(e_effective), 'relative_climate_factor': float(climate_material_factor),
+            'shift_model': 'WLF configurable', 'master_curve_model': 'Sigmoidal configurable',
+            'master_curve_parameters': {'delta':mc_delta,'alpha':mc_alpha,'beta':mc_beta,'gamma':mc_gamma,'tref_c':reference_temp_c,'c1':wlf_c1,'c2':wlf_c2,'frequency_hz':analysis_frequency_hz},
+            'method': 'Curva maestra + WLF configurable; requiere coeficientes documentados'
         }
-        cm1, cm2 = st.columns(2)
-        cm1.metric("E* de referencia", f"{e_ref_state:,.0f} MPa")
-        cm2.metric("Factor climático relativo", f"{climate_material_factor:.3f}")
         if not master_curve_confirmed:
-            st.warning("El E* mensual se acepta como entrada documental, pero la curva maestra todavía no está confirmada.")
+            st.warning("La curva se calcula con parámetros configurables, pero el expediente aún indica que la curva maestra no está confirmada documentalmente.")
 
     st.markdown("#### Alertas de cumplimiento y revisión")
     climate_checks = climate_alerts(st.session_state.active_tomo, pavement_type, air_temp_c, pavement_temp_c, latitude, depth_mm, analysis_category, temp_data_confirmed, master_curve_confirmed, station_selected)
@@ -2472,9 +2564,30 @@ with p4:
         stabilized_strength = mt6.number_input("Resistencia de referencia base estabilizada (MPa)", min_value=0.0, max_value=50.0, value=3.5 if base_stabilized_cm > 0 else 0.0, step=0.1, key="mat_stabilized_strength")
         material_source = mt7.text_input("Fuente / informe de materiales", value="", key="mat_source")
         material_notes = st.text_area("Notas de caracterización de materiales", value="", height=80, key="mat_notes")
+
+        st.markdown("##### Modelo constitutivo para arenas / bases / subbases granulares")
+        st.caption("Use coeficientes k1, k2 y k3 obtenidos del ensayo/modelo documentado. La aplicación muestra la fórmula y sustitución para trazabilidad.")
+        gr1, gr2, gr3, gr4 = st.columns(4)
+        granular_type = gr1.selectbox("Material granular", ["Base granular", "Subbase granular", "Arena / material seleccionado"], key='granular_model_type')
+        granular_k1 = gr2.number_input("k1", value=1000.0, step=50.0, key='granular_k1')
+        granular_k2 = gr3.number_input("k2", value=0.50, step=0.05, key='granular_k2')
+        granular_k3 = gr4.number_input("k3", value=-0.20, step=0.05, key='granular_k3')
+        gs1, gs2, gs3 = st.columns(3)
+        theta_kpa = gs1.number_input("Esfuerzo volumétrico θ (kPa)", min_value=0.1, max_value=5000.0, value=300.0, step=10.0, key='granular_theta')
+        tau_oct_kpa = gs2.number_input("Esfuerzo octaédrico τoct (kPa)", min_value=0.0, max_value=5000.0, value=100.0, step=10.0, key='granular_tau_oct')
+        pa_kpa = gs3.number_input("Presión atmosférica Pa (kPa)", min_value=1.0, max_value=200.0, value=101.325, step=0.5, key='granular_pa')
+        granular_mr_calc = granular_resilient_modulus_mpa(granular_k1, granular_k2, granular_k3, theta_kpa, tau_oct_kpa, pa_kpa)
+        st.latex(r"M_R=k_1P_a\left(\frac{\theta}{P_a}\right)^{k_2}\left(\frac{\tau_{oct}}{P_a}+1\right)^{k_3}")
+        st.write(f"Sustitución: k1={granular_k1:.3f}; k2={granular_k2:.3f}; k3={granular_k3:.3f}; θ={theta_kpa:.1f} kPa; τoct={tau_oct_kpa:.1f} kPa; Pa={pa_kpa:.3f} kPa.")
+        st.metric("Mr calculado del material granular", f"{granular_mr_calc:,.1f} MPa")
+        granular_apply_note = st.selectbox("Uso del Mr calculado", ["Referencia / comparación", "Usar como Mr efectivo de base", "Usar como Mr efectivo de subbase"], key='granular_apply_mode')
+
         st.session_state.design_materials = {
             "asphalt_dynamic_modulus_mpa": float(asphalt_dynamic_modulus), "asphalt_poisson": float(asphalt_poisson),
-            "base_mr_mpa": float(base_mr), "subbase_mr_mpa": float(subbase_mr),
+            "base_mr_mpa": float(granular_mr_calc if granular_apply_note == "Usar como Mr efectivo de base" else base_mr),
+            "subbase_mr_mpa": float(granular_mr_calc if granular_apply_note == "Usar como Mr efectivo de subbase" else subbase_mr),
+            "base_mr_input_mpa": float(base_mr), "subbase_mr_input_mpa": float(subbase_mr),
+            "granular_model": {'material':granular_type,'k1':granular_k1,'k2':granular_k2,'k3':granular_k3,'theta_kpa':theta_kpa,'tau_oct_kpa':tau_oct_kpa,'pa_kpa':pa_kpa,'mr_calculated_mpa':granular_mr_calc,'application':granular_apply_note},
             "stabilized_modulus_mpa": float(stabilized_modulus), "stabilized_strength_mpa": float(stabilized_strength),
             "source": material_source, "notes": material_notes, "master_curve_confirmed": bool(master_curve_confirmed),
         }
@@ -2488,6 +2601,19 @@ with p4:
         m2.metric("Base total", f"{base_total_cm:.1f} cm")
         m3.metric("Subbase", f"{subbase_cm:.1f} cm")
         m4.metric("Sección modelada", f"{total_thickness:.1f} cm")
+
+        st.markdown("##### Verificación de espesor de carpeta asfáltica")
+        st.caption("Rango configurable mientras se documenta la tabla GDP/CR-2020 aplicable. El sistema no declara estos valores como límites normativos universales.")
+        th1, th2, th3 = st.columns(3)
+        asphalt_min_cm = th1.number_input("Espesor mínimo permitido (cm)", min_value=0.0, max_value=40.0, value=5.0, step=0.5, key='asphalt_min_cm_criterion')
+        asphalt_max_cm = th2.number_input("Espesor máximo permitido (cm)", min_value=0.0, max_value=80.0, value=20.0, step=0.5, key='asphalt_max_cm_criterion')
+        thickness_source = th3.text_input("Fuente del rango de carpeta", value="Pendiente de documentar", key='asphalt_thickness_source')
+        asphalt_thickness_ok = float(asphalt_min_cm) <= float(asphalt_cm) <= float(asphalt_max_cm) if asphalt_max_cm >= asphalt_min_cm else False
+        if asphalt_thickness_ok:
+            st.success(f"Carpeta {asphalt_cm:.1f} cm: dentro del rango configurado {asphalt_min_cm:.1f}–{asphalt_max_cm:.1f} cm.")
+        else:
+            st.error(f"Carpeta {asphalt_cm:.1f} cm: fuera del rango configurado {asphalt_min_cm:.1f}–{asphalt_max_cm:.1f} cm. Revise criterio y estructura.")
+        st.session_state.asphalt_thickness_control = {'asphalt_cm':float(asphalt_cm),'min_cm':float(asphalt_min_cm),'max_cm':float(asphalt_max_cm),'complies':bool(asphalt_thickness_ok),'source':thickness_source}
 
         if asphalt_cm <= 0:
             st.warning("Para una evaluación de pavimento flexible/semirrígido en este flujo debe documentarse la capa superficial correspondiente. El valor actual no se interpreta como una solución final.")
