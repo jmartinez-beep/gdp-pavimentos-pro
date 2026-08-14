@@ -1,0 +1,46 @@
+name: Eliminar selector Tomo duplicado
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/remove_duplicate_tomo_selector_dashboard.py'
+      - '.github/workflows/remove-duplicate-tomo-selector.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar corrección
+        run: python tools/remove_duplicate_tomo_selector_dashboard.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar selector único
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          assert '# SINGLE_TOMO_SELECTOR_DASHBOARD' in t
+          assert 'key="dash_tomo_selector"' not in t
+          assert 'dash_tomo = active_tomo' in t
+          assert t.count('key="tomo_selector"') == 1
+          print('Selector Tomo único verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Eliminar selector Tomo duplicado del Dashboard"
+            git push
+          fi
