@@ -244,6 +244,67 @@ def money(value: float) -> str:
     return f"₡{value:,.0f}".replace(",", " ")
 
 
+# AASHTO93_LAYER_CONTROLS
+def aashto93_flexible_log_w18(sn: float, mr_mpa: float, zr: float, so: float, delta_psi: float) -> float:
+    """Ecuación AASHTO 1993 para pavimento flexible.
+
+    Mr se recibe en MPa y se convierte a psi. Devuelve log10(W18).
+    Este cálculo se presenta como diseño preliminar AASHTO-93, separado del
+    análisis mecanístico-empírico GDP-2024 Tomo I.
+    """
+    sn = max(float(sn), 0.01)
+    mr_psi = max(float(mr_mpa) * 145.0377377, 1.0)
+    delta_psi = min(max(float(delta_psi), 0.01), 2.69)
+    service_term = math.log10(delta_psi / (4.2 - 1.5))
+    denominator = 0.40 + 1094.0 / ((sn + 1.0) ** 5.19)
+    return (
+        float(zr) * float(so)
+        + 9.36 * math.log10(sn + 1.0)
+        - 0.20
+        + service_term / denominator
+        + 2.32 * math.log10(mr_psi)
+        - 8.07
+    )
+
+
+def aashto93_required_sn(w18: float, mr_mpa: float, reliability_pct: float, so: float,
+                         initial_serviceability: float, terminal_serviceability: float) -> dict:
+    """Resuelve SN requerido por bisección para la ecuación AASHTO-93 flexible."""
+    w18 = max(float(w18), 1.0)
+    r = min(max(float(reliability_pct) / 100.0, 0.500001), 0.999999)
+    zr = NormalDist().inv_cdf(1.0 - r)
+    delta_psi = max(float(initial_serviceability) - float(terminal_serviceability), 0.01)
+    target = math.log10(w18)
+    low, high = 0.01, 12.0
+    while aashto93_flexible_log_w18(high, mr_mpa, zr, so, delta_psi) < target and high < 30.0:
+        high *= 1.5
+    for _ in range(90):
+        mid = (low + high) / 2.0
+        if aashto93_flexible_log_w18(mid, mr_mpa, zr, so, delta_psi) < target:
+            low = mid
+        else:
+            high = mid
+    sn_required = (low + high) / 2.0
+    return {
+        'sn_required': sn_required, 'zr': zr, 'so': float(so), 'delta_psi': delta_psi,
+        'w18': w18, 'mr_mpa': float(mr_mpa), 'mr_psi': float(mr_mpa) * 145.0377377,
+        'equation': 'AASHTO 1993 flexible: log10(W18)=ZR·So+9.36log10(SN+1)-0.20+[log10(ΔPSI/2.7)]/[0.40+1094/(SN+1)^5.19]+2.32log10(Mr)-8.07',
+    }
+
+
+def residual_layer_thicknesses(sn_required: float, a1: float, a2: float, a3: float, m2: float, m3: float,
+                               d1_adopted_in: float, d2_adopted_in: float) -> dict:
+    """Despejes secuenciales de espesor por SN residual; resultado en pulgadas."""
+    a1 = max(float(a1), 1e-9); a2 = max(float(a2), 1e-9); a3 = max(float(a3), 1e-9)
+    m2 = max(float(m2), 1e-9); m3 = max(float(m3), 1e-9)
+    sn1 = a1 * max(float(d1_adopted_in), 0.0)
+    d1_all_sn = max(float(sn_required), 0.0) / a1
+    d2_req = max(float(sn_required) - sn1, 0.0) / (a2 * m2)
+    sn2_adopted = a2 * m2 * max(float(d2_adopted_in), 0.0)
+    d3_req = max(float(sn_required) - sn1 - sn2_adopted, 0.0) / (a3 * m3)
+    return {'d1_if_single_layer_in': d1_all_sn, 'd2_residual_in': d2_req, 'd3_residual_in': d3_req}
+
+
 # MECHANISTIC_SCREENING_PHASE2
 # INTEGRATED_STAGES_2_5_9_10_11_12_13_18
 def reliability_multiplier(reliability_pct: float, log_sigma: float) -> float:
@@ -2494,16 +2555,71 @@ with pflex:
         if reliability_pct < reliability_default:
             st.warning(f"La confiabilidad ingresada ({reliability_pct:.0f}%) es menor al valor de control preliminar asociado a Categoría {tomo1_category} ({reliability_default:.0f}%). Documente la justificación.")
 
+        st.markdown("#### Diseño preliminar AASHTO 93 — SN requerido y aportado")
+        st.caption("Este bloque es una comprobación preliminar AASHTO-93 y se mantiene separado del diseño mecanístico-empírico GDP-2024 Tomo I.")
         f1,f2,f3,f4 = st.columns(4)
-        a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.0, max_value=1.0, value=0.44, step=0.01)
-        a2 = f2.number_input("Coeficiente estructural base a2", min_value=0.0, max_value=1.0, value=0.14, step=0.01)
-        a3 = f3.number_input("Coeficiente estructural subbase a3", min_value=0.0, max_value=1.0, value=0.11, step=0.01)
-        m2 = f4.number_input("Coeficiente drenaje base m2", min_value=0.4, max_value=1.4, value=1.00, step=0.05)
-        m3 = st.number_input("Coeficiente drenaje subbase m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05)
+        a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.01, max_value=1.0, value=0.44, step=0.01, key="aashto_a1")
+        a2 = f2.number_input("Coeficiente estructural base a2", min_value=0.01, max_value=1.0, value=0.14, step=0.01, key="aashto_a2")
+        a3 = f3.number_input("Coeficiente estructural subbase a3", min_value=0.01, max_value=1.0, value=0.11, step=0.01, key="aashto_a3")
+        m2 = f4.number_input("Coeficiente drenaje base m2", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m2")
+        m3 = st.number_input("Coeficiente drenaje subbase m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m3")
+
         d1=float(selected_row['Carpeta_cm'])/2.54; d2=float(selected_row['Base_cm'])/2.54; d3=float(selected_row['Subbase_cm'])/2.54
         sn1=a1*d1; sn2=a2*m2*d2; sn3=a3*m3*d3; sn_total=sn1+sn2+sn3
-        c1,c2,c3,c4=st.columns(4); c1.metric("SN carpeta",f"{sn1:.2f}"); c2.metric("SN base",f"{sn2:.2f}"); c3.metric("SN subbase",f"{sn3:.2f}"); c4.metric("SN aportado",f"{sn_total:.2f}")
-        st.progress(min(sn_total/6.0,1.0), text="Indicador relativo del aporte estructural")
+        sn_cum1 = sn1; sn_cum2 = sn1 + sn2; sn_cum3 = sn_total
+
+        aashto_result = aashto93_required_sn(esal, mr, reliability_pct, overall_standard_error, initial_serviceability, terminal_serviceability)
+        sn_required = float(aashto_result['sn_required'])
+        aashto_complies = sn_total >= sn_required
+        layer_residuals = residual_layer_thicknesses(sn_required, a1, a2, a3, m2, m3, d1, d2)
+        st.session_state.aashto93_design = {**aashto_result, 'sn_provided': sn_total, 'complies': bool(aashto_complies),
+            'a1':a1,'a2':a2,'a3':a3,'m2':m2,'m3':m3,'D1_in':d1,'D2_in':d2,'D3_in':d3,
+            'SN1_contribution':sn1,'SN2_contribution':sn2,'SN3_contribution':sn3,
+            'SN_cumulative_1':sn_cum1,'SN_cumulative_2':sn_cum2,'SN_cumulative_3':sn_cum3, **layer_residuals}
+
+        ares1, ares2, ares3, ares4 = st.columns(4)
+        ares1.metric("SN requerido AASHTO-93", f"{sn_required:.2f}")
+        ares2.metric("SN aportado", f"{sn_total:.2f}", "Cumple" if aashto_complies else "No cumple")
+        ares3.metric("ZR", f"{aashto_result['zr']:.3f}")
+        ares4.metric("ΔPSI", f"{aashto_result['delta_psi']:.2f}")
+        st.latex(r"\log_{10}(W_{18})=Z_RS_0+9.36\log_{10}(SN+1)-0.20+\frac{\log_{10}(\Delta PSI/2.7)}{0.40+1094/(SN+1)^{5.19}}+2.32\log_{10}(M_R)-8.07")
+        st.caption(f"Sustitución: W18={esal:,.0f}; R={reliability_pct:.1f}%; ZR={aashto_result['zr']:.3f}; S0={overall_standard_error:.2f}; ΔPSI={aashto_result['delta_psi']:.2f}; Mr={mr:.2f} MPa ({aashto_result['mr_psi']:,.0f} psi).")
+
+        layer_table = pd.DataFrame([
+            ['Carpeta asfáltica','D1',d1,d1*2.54,'a1',a1,1.0,sn1,sn_cum1],
+            ['Base','D2',d2,d2*2.54,'a2',a2,m2,sn2,sn_cum2],
+            ['Subbase','D3',d3,d3*2.54,'a3',a3,m3,sn3,sn_cum3],
+        ], columns=['Capa','Espesor','D (in)','D (cm)','Coeficiente','aᵢ','mᵢ','Aporte SN','SN acumulado'])
+        st.dataframe(layer_table, use_container_width=True, hide_index=True)
+        st.latex(r"SN=a_1D_1+a_2m_2D_2+a_3m_3D_3")
+        st.write(f"**SN1 = a1·D1 = {a1:.3f}×{d1:.3f} = {sn1:.3f}**")
+        st.write(f"**SN2 (aporte base) = a2·m2·D2 = {a2:.3f}×{m2:.3f}×{d2:.3f} = {sn2:.3f}**")
+        st.write(f"**SN3 (aporte subbase) = a3·m3·D3 = {a3:.3f}×{m3:.3f}×{d3:.3f} = {sn3:.3f}**")
+
+        st.markdown("##### Despeje teórico de espesores por SN residual")
+        st.latex(r"D_2=\frac{SN_{req}-a_1D_1}{a_2m_2}")
+        st.latex(r"D_3=\frac{SN_{req}-a_1D_1-a_2m_2D_2}{a_3m_3}")
+        dr1, dr2, dr3 = st.columns(3)
+        dr1.metric("D1 si la carpeta aportara todo el SN", f"{layer_residuals['d1_if_single_layer_in']:.2f} in", f"{layer_residuals['d1_if_single_layer_in']*2.54:.1f} cm")
+        dr2.metric("D2 teórico por SN residual", f"{layer_residuals['d2_residual_in']:.2f} in", f"{layer_residuals['d2_residual_in']*2.54:.1f} cm")
+        dr3.metric("D3 teórico con D1 y D2 adoptados", f"{layer_residuals['d3_residual_in']:.2f} in", f"{layer_residuals['d3_residual_in']*2.54:.1f} cm")
+        st.info("Los espesores teóricos por SN residual deben ajustarse a mínimos constructivos, rangos GDP/CR-2020 aplicables y al análisis mecanístico-empírico; no son por sí solos una sección final.")
+
+        st.markdown("##### Control de calidad CBR de materiales granulares")
+        cb1, cb2, cb3, cb4 = st.columns(4)
+        base_cbr = cb1.number_input("CBR material de base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_material_cbr")
+        base_cbr_min = cb2.number_input("CBR mínimo exigido a base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_cbr_min_criterion", help="Criterio configurable: confirme el valor con la especificación vigente aplicable al material/proyecto.")
+        subbase_cbr = cb3.number_input("CBR material de subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_material_cbr")
+        subbase_cbr_min = cb4.number_input("CBR mínimo exigido a subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_cbr_min_criterion", help="Criterio configurable: confirme el valor con la especificación vigente aplicable al material/proyecto.")
+        base_cbr_ok = base_cbr >= base_cbr_min; subbase_cbr_ok = subbase_cbr >= subbase_cbr_min
+        st.session_state.layer_quality_controls = {'base_cbr':base_cbr,'base_cbr_min':base_cbr_min,'base_cbr_ok':base_cbr_ok,
+            'subbase_cbr':subbase_cbr,'subbase_cbr_min':subbase_cbr_min,'subbase_cbr_ok':subbase_cbr_ok,
+            'criterion_note':'Valores mínimos configurables; verificar contra especificación vigente del proyecto.'}
+        qc1,qc2 = st.columns(2)
+        (qc1.success if base_cbr_ok else qc1.error)(f"Base: CBR {base_cbr:.1f}% {'≥' if base_cbr_ok else '<'} criterio {base_cbr_min:.1f}%")
+        (qc2.success if subbase_cbr_ok else qc2.error)(f"Subbase: CBR {subbase_cbr:.1f}% {'≥' if subbase_cbr_ok else '<'} criterio {subbase_cbr_min:.1f}%")
+
+        st.progress(min(sn_total/max(sn_required,0.01),1.0), text="Relación SN aportado / SN requerido")
 
         st.markdown("### Respuesta mecanística de cribado — Tomo I")
         st.warning(

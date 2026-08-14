@@ -16,7 +16,12 @@ def replace_once(old: str, new: str, label: str) -> None:
     text = text.replace(old, new, 1)
 
 
-replace_once('import math\n', 'import math\nfrom statistics import NormalDist\n', 'importar NormalDist')
+if 'from statistics import NormalDist\n' not in text:
+    pos = text.find('import math\n')
+    if pos < 0:
+        raise RuntimeError('No se encontró import math para agregar NormalDist')
+    pos += len('import math\n')
+    text = text[:pos] + 'from statistics import NormalDist\n' + text[pos:]
 
 anchor = '''def money(value: float) -> str:\n    return f"₡{value:,.0f}".replace(",", " ")\n\n\n'''
 block = anchor + '''# AASHTO93_LAYER_CONTROLS\ndef aashto93_flexible_log_w18(sn: float, mr_mpa: float, zr: float, so: float, delta_psi: float) -> float:\n    """Ecuación AASHTO 1993 para pavimento flexible.\n\n    Mr se recibe en MPa y se convierte a psi. Devuelve log10(W18).\n    Este cálculo se presenta como diseño preliminar AASHTO-93, separado del\n    análisis mecanístico-empírico GDP-2024 Tomo I.\n    """\n    sn = max(float(sn), 0.01)\n    mr_psi = max(float(mr_mpa) * 145.0377377, 1.0)\n    delta_psi = min(max(float(delta_psi), 0.01), 2.69)\n    service_term = math.log10(delta_psi / (4.2 - 1.5))\n    denominator = 0.40 + 1094.0 / ((sn + 1.0) ** 5.19)\n    return (\n        float(zr) * float(so)\n        + 9.36 * math.log10(sn + 1.0)\n        - 0.20\n        + service_term / denominator\n        + 2.32 * math.log10(mr_psi)\n        - 8.07\n    )\n\n\ndef aashto93_required_sn(w18: float, mr_mpa: float, reliability_pct: float, so: float,\n                         initial_serviceability: float, terminal_serviceability: float) -> dict:\n    """Resuelve SN requerido por bisección para la ecuación AASHTO-93 flexible."""\n    w18 = max(float(w18), 1.0)\n    r = min(max(float(reliability_pct) / 100.0, 0.500001), 0.999999)\n    zr = NormalDist().inv_cdf(1.0 - r)\n    delta_psi = max(float(initial_serviceability) - float(terminal_serviceability), 0.01)\n    target = math.log10(w18)\n    low, high = 0.01, 12.0\n    while aashto93_flexible_log_w18(high, mr_mpa, zr, so, delta_psi) < target and high < 30.0:\n        high *= 1.5\n    for _ in range(90):\n        mid = (low + high) / 2.0\n        if aashto93_flexible_log_w18(mid, mr_mpa, zr, so, delta_psi) < target:\n            low = mid\n        else:\n            high = mid\n    sn_required = (low + high) / 2.0\n    return {\n        'sn_required': sn_required, 'zr': zr, 'so': float(so), 'delta_psi': delta_psi,\n        'w18': w18, 'mr_mpa': float(mr_mpa), 'mr_psi': float(mr_mpa) * 145.0377377,\n        'equation': 'AASHTO 1993 flexible: log10(W18)=ZR·So+9.36log10(SN+1)-0.20+[log10(ΔPSI/2.7)]/[0.40+1094/(SN+1)^5.19]+2.32log10(Mr)-8.07',\n    }\n\n\ndef residual_layer_thicknesses(sn_required: float, a1: float, a2: float, a3: float, m2: float, m3: float,\n                               d1_adopted_in: float, d2_adopted_in: float) -> dict:\n    """Despejes secuenciales de espesor por SN residual; resultado en pulgadas."""\n    a1 = max(float(a1), 1e-9); a2 = max(float(a2), 1e-9); a3 = max(float(a3), 1e-9)\n    m2 = max(float(m2), 1e-9); m3 = max(float(m3), 1e-9)\n    sn1 = a1 * max(float(d1_adopted_in), 0.0)\n    d1_all_sn = max(float(sn_required), 0.0) / a1\n    d2_req = max(float(sn_required) - sn1, 0.0) / (a2 * m2)\n    sn2_adopted = a2 * m2 * max(float(d2_adopted_in), 0.0)\n    d3_req = max(float(sn_required) - sn1 - sn2_adopted, 0.0) / (a3 * m3)\n    return {'d1_if_single_layer_in': d1_all_sn, 'd2_residual_in': d2_req, 'd3_residual_in': d3_req}\n\n\n'''
@@ -27,16 +32,6 @@ new = '''        st.markdown("#### Diseño preliminar AASHTO 93 — SN requerido
 replace_once(old, new, 'reemplazar bloque SN por AASHTO93 completo')
 
 # Guardar AASHTO y control de materiales en el payload.
-replace_once(
-'''        "mechanistic_screening": st.session_state.get("mechanistic_screening", {}) if active_tomo == "Tomo I" else {},\n        "climate": {''',
-'''        "mechanistic_screening": st.session_state.get("mechanistic_screening", {}) if active_tomo == "Tomo I" else {},\n        "aashto93": st.session_state.get("aashto93_design", {}) if active_tomo == "Tomo I" else {},\n        "layer_quality_controls": st.session_state.get("layer_quality_controls", {}) if active_tomo == "Tomo I" else {},\n        "climate": {''',
-'añadir AASHTO93 al payload')
-
-# Excel: hojas de AASHTO93 y calidad granular.
-replace_once(
-'''        pd.DataFrame([payload.get("mechanistic_screening", {})]).to_excel(writer, sheet_name="Respuesta_ME", index=False)\n        climate_payload = dict(payload.get("climate", {}))''',
-'''        pd.DataFrame([payload.get("mechanistic_screening", {})]).to_excel(writer, sheet_name="Respuesta_ME", index=False)\n        pd.DataFrame([payload.get("aashto93", {})]).to_excel(writer, sheet_name="AASHTO93", index=False)\n        pd.DataFrame([payload.get("layer_quality_controls", {})]).to_excel(writer, sheet_name="Calidad_granulares", index=False)\n        climate_payload = dict(payload.get("climate", {}))''',
-'añadir hojas Excel')
 
 APP.write_text(text, encoding='utf-8')
-print('AASHTO-93, D/SN y controles CBR integrados correctamente.')
+print('AASHTO93 y controles de capas aplicados; exportación diferida a la siguiente etapa.')
