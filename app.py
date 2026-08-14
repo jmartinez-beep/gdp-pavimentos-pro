@@ -277,6 +277,54 @@ def project_point_kml(project_name: str, latitude: float, longitude: float, desc
     )
 
 
+# MAP_GOOGLE_EARTH_PROJECT_FEATURES
+def project_features_kml(project_name: str, points: list[dict], lines: list[dict]) -> str:
+    name = _xml_escape(project_name or "Proyecto GDP")
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'<name>{name}</name>',
+        '<Style id="projectPoint"><IconStyle><scale>1.1</scale></IconStyle></Style>',
+        '<Style id="projectLine"><LineStyle><width>4</width></LineStyle></Style>',
+        '<Folder><name>Puntos del proyecto</name>',
+    ]
+    for p in points:
+        if not p.get('valid', False):
+            continue
+        pname = _xml_escape(p.get('name', 'Punto'))
+        ptype = _xml_escape(p.get('type', 'Otro'))
+        pdesc = _xml_escape(p.get('description', ''))
+        lon = float(p['longitude']); lat = float(p['latitude'])
+        parts.extend([
+            '<Placemark>', f'<name>{pname}</name>', '<styleUrl>#projectPoint</styleUrl>',
+            f'<description>Tipo: {ptype} | {pdesc}</description>',
+            f'<Point><coordinates>{lon:.8f},{lat:.8f},0</coordinates></Point>', '</Placemark>'
+        ])
+    parts.extend(['</Folder>', '<Folder><name>Ejes y tramos</name>'])
+    for line in lines:
+        coords = line.get('coordinates', [])
+        if len(coords) < 2:
+            continue
+        lname = _xml_escape(line.get('name', 'Tramo'))
+        ldesc = _xml_escape(line.get('description', ''))
+        coord_text = ' '.join(f"{float(lon):.8f},{float(lat):.8f},0" for lon, lat in coords)
+        parts.extend([
+            '<Placemark>', f'<name>{lname}</name>', '<styleUrl>#projectLine</styleUrl>',
+            f'<description>{ldesc}</description>',
+            '<LineString><tessellate>1</tessellate>', f'<coordinates>{coord_text}</coordinates>',
+            '</LineString>', '</Placemark>'
+        ])
+    parts.extend(['</Folder>', '</Document>', '</kml>'])
+    return '\n'.join(parts) + '\n'
+
+
+def _interpolate_wgs84(start_lon: float, start_lat: float, end_lon: float, end_lat: float, ratio: float) -> tuple[float, float]:
+    r = max(0.0, min(1.0, float(ratio)))
+    return (float(start_lon) + (float(end_lon)-float(start_lon))*r,
+            float(start_lat) + (float(end_lat)-float(start_lat))*r)
+
+
 # CLIMATE_GRANULAR_MASTER_CURVE_PHASE
 # VERIFIED_CR2020_MATERIAL_THRESHOLDS
 CR2020_BASE_CBR_MIN_PCT = 80.0
@@ -3721,7 +3769,7 @@ with p6:
 
 with pmap:
     st.subheader("Mapa del proyecto / Google Earth")
-    st.caption("Las coordenadas se toman automáticamente de la pestaña 1. Proyecto. No es necesario volver a digitarlas.")
+    st.caption("Las coordenadas principales se toman automáticamente de 1. Proyecto. Puede agregar P1, P2, sondeos, puentes, alcantarillas, inicio/fin y otros elementos sin modificar la coordenada central.")
 
     map_lat = float(latitude)
     map_lon = float(longitude)
@@ -3734,52 +3782,118 @@ with pmap:
     mp3.metric("Latitud WGS84", f"{map_lat:.7f}°")
     mp4.metric("Longitud WGS84", f"{map_lon:.7f}°")
 
-    if is_plausible_costa_rica_wgs84(map_lon, map_lat):
-        map_df = pd.DataFrame({
-            "lat": [map_lat], "lon": [map_lon],
-            "Proyecto": [project_name], "Ubicación": [location],
-        })
-        st.map(map_df, latitude="lat", longitude="lon", zoom=15)
-    else:
-        st.error("Las coordenadas actuales quedan fuera del entorno geográfico esperado de Costa Rica. Revise la pestaña Proyecto antes de abrir o exportar la ubicación.")
+    st.markdown("#### Inventario geográfico del proyecto")
+    st.caption("Agregue filas para sondeos, P1/P2, puentes, alcantarillas, accesos u otros elementos. Puede ingresar CRTM05 o WGS84 por fila.")
+    default_geo_points = pd.DataFrame([{
+        'Nombre': 'Punto central del proyecto', 'Tipo': 'Proyecto', 'Sistema': 'WGS84',
+        'Este_CRTM05': map_e, 'Norte_CRTM05': map_n, 'Latitud': map_lat, 'Longitud': map_lon,
+        'Descripción': location,
+    }])
+    geo_points_input = st.data_editor(
+        st.session_state.get('geo_project_points_input', default_geo_points),
+        num_rows='dynamic', use_container_width=True, hide_index=True, key='geo_project_points_editor',
+        column_config={
+            'Nombre': st.column_config.TextColumn('Nombre / código'),
+            'Tipo': st.column_config.SelectboxColumn('Tipo', options=['Proyecto','Inicio','Fin','Sondeo P1','Sondeo P2','Sondeo','Puente','Alcantarilla','Intersección','Acceso','Otro']),
+            'Sistema': st.column_config.SelectboxColumn('Sistema de entrada', options=['WGS84','CRTM05']),
+            'Este_CRTM05': st.column_config.NumberColumn('Este CRTM05', format='%.3f'),
+            'Norte_CRTM05': st.column_config.NumberColumn('Norte CRTM05', format='%.3f'),
+            'Latitud': st.column_config.NumberColumn('Latitud WGS84', format='%.7f'),
+            'Longitud': st.column_config.NumberColumn('Longitud WGS84', format='%.7f'),
+            'Descripción': st.column_config.TextColumn('Descripción'),
+        },
+    )
+    st.session_state.geo_project_points_input = geo_points_input.copy()
 
-    st.markdown("#### Abrir ubicación")
+    resolved_points = []
+    for _, row in geo_points_input.iterrows():
+        name = str(row.get('Nombre','')).strip() or 'Punto'
+        ptype = str(row.get('Tipo','Otro')).strip() or 'Otro'
+        system = str(row.get('Sistema','WGS84')).strip() or 'WGS84'
+        desc = str(row.get('Descripción','') or '')
+        try:
+            if system == 'CRTM05':
+                e = float(row.get('Este_CRTM05', 0) or 0); n = float(row.get('Norte_CRTM05', 0) or 0)
+                lon, lat = crtm05_to_wgs84(e, n)
+            else:
+                lat = float(row.get('Latitud', 0) or 0); lon = float(row.get('Longitud', 0) or 0)
+                e, n = wgs84_to_crtm05(lon, lat)
+            valid = bool(is_plausible_costa_rica_wgs84(lon, lat))
+        except Exception:
+            e = n = lat = lon = 0.0; valid = False
+        resolved_points.append({
+            'name': name, 'type': ptype, 'system_input': system, 'description': desc,
+            'crtm_easting': float(e), 'crtm_northing': float(n), 'latitude': float(lat), 'longitude': float(lon), 'valid': valid,
+        })
+
+    resolved_df = pd.DataFrame([{
+        'Nombre':p['name'],'Tipo':p['type'],'Este CRTM05':p['crtm_easting'],'Norte CRTM05':p['crtm_northing'],
+        'Latitud':p['latitude'],'Longitud':p['longitude'],'Estado':'OK' if p['valid'] else 'Revisar'
+    } for p in resolved_points])
+    if not resolved_df.empty:
+        st.dataframe(resolved_df, use_container_width=True, hide_index=True)
+
+    valid_points = [p for p in resolved_points if p['valid']]
+    if valid_points:
+        map_df = pd.DataFrame({'lat':[p['latitude'] for p in valid_points], 'lon':[p['longitude'] for p in valid_points], 'Punto':[p['name'] for p in valid_points]})
+        st.map(map_df, latitude='lat', longitude='lon', zoom=15)
+    else:
+        st.error("No hay puntos geográficos válidos para mostrar. Revise coordenadas y sistema de entrada.")
+
+    st.markdown("#### Eje y tramos homogéneos")
+    axis1, axis2, axis3, axis4 = st.columns(4)
+    axis_start_lat = axis1.number_input('Latitud inicio eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_start_lat', map_lat)), format='%.7f', key='map_axis_start_lat')
+    axis_start_lon = axis2.number_input('Longitud inicio eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_start_lon', map_lon)), format='%.7f', key='map_axis_start_lon')
+    axis_end_lat = axis3.number_input('Latitud fin eje', -90.0, 90.0, value=float(st.session_state.get('map_axis_end_lat', map_lat)), format='%.7f', key='map_axis_end_lat')
+    axis_end_lon = axis4.number_input('Longitud fin eje', -180.0, 180.0, value=float(st.session_state.get('map_axis_end_lon', map_lon)), format='%.7f', key='map_axis_end_lon')
+    include_segments = st.checkbox('Incluir tramos homogéneos proyectados sobre este eje recto de referencia', value=True, key='map_include_segments')
+    st.caption("Los tramos se interpolan linealmente entre inicio y fin usando sus estaciones en metros. Es una representación GIS de referencia, no sustituye el alineamiento topográfico real.")
+
+    project_lines = []
+    if is_plausible_costa_rica_wgs84(axis_start_lon, axis_start_lat) and is_plausible_costa_rica_wgs84(axis_end_lon, axis_end_lat) and (abs(axis_start_lon-axis_end_lon)>1e-12 or abs(axis_start_lat-axis_end_lat)>1e-12):
+        project_lines.append({'name':'Eje de referencia','description':'Eje recto de referencia definido en GDP Pavimentos Pro','coordinates':[(axis_start_lon,axis_start_lat),(axis_end_lon,axis_end_lat)]})
+        if include_segments:
+            total_len = max(float(project_length_m), 1e-9)
+            for seg in st.session_state.get('homogeneous_segments', []):
+                ini = float(seg.get('Inicio_m',0) or 0); fin = float(seg.get('Fin_m',0) or 0)
+                p0 = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, ini/total_len)
+                p1s = _interpolate_wgs84(axis_start_lon, axis_start_lat, axis_end_lon, axis_end_lat, fin/total_len)
+                project_lines.append({
+                    'name':str(seg.get('Tramo','Tramo homogéneo')),
+                    'description':f"Estaciones {ini:.2f}–{fin:.2f} m | CBR {float(seg.get('CBR_%',0) or 0):.2f}% | Mr {float(seg.get('Mr_MPa',0) or 0):.2f} MPa",
+                    'coordinates':[p0,p1s],
+                })
+    else:
+        st.info("Defina coordenadas distintas de inicio y fin para generar el eje y los tramos como líneas en Google Earth.")
+
+    st.markdown("#### Abrir ubicación principal")
     google_maps_url = f"https://www.google.com/maps/search/?api=1&query={map_lat:.8f},{map_lon:.8f}"
     gm1, gm2 = st.columns(2)
-    gm1.link_button("🌎 Abrir en Google Maps", google_maps_url, use_container_width=True)
-    gm2.markdown(
-        f"**Coordenadas para Google Earth:** `{map_lat:.8f}, {map_lon:.8f}`  \n"
-        "Puede pegar estas coordenadas directamente en el buscador de Google Earth."
-    )
+    gm1.link_button("🌎 Abrir punto central en Google Maps", google_maps_url, use_container_width=True)
+    gm2.markdown(f"**Coordenadas Google Earth:** `{map_lat:.8f}, {map_lon:.8f}`")
 
-    st.markdown("#### Exportar a Google Earth (KML)")
-    kml_description = (
-        f"Proyecto: {project_name} | Ubicación: {location} | Tomo activo: {active_tomo} | "
-        f"CRTM05 E={map_e:.3f} m, N={map_n:.3f} m"
-    )
-    kml_text = project_point_kml(project_name, map_lat, map_lon, kml_description)
+    st.markdown("#### Exportar proyecto completo a Google Earth")
     safe_project_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in str(project_name)).strip('_') or 'Proyecto_GDP'
+    full_kml = project_features_kml(project_name, resolved_points, project_lines)
     st.download_button(
-        "⬇️ Descargar punto KML para Google Earth",
-        data=kml_text.encode("utf-8"),
-        file_name=f"{safe_project_name}_ubicacion.kml",
-        mime="application/vnd.google-earth.kml+xml",
-        use_container_width=True,
+        "⬇️ Descargar KML completo del proyecto", data=full_kml.encode('utf-8'),
+        file_name=f"{safe_project_name}_proyecto_completo.kml", mime='application/vnd.google-earth.kml+xml', use_container_width=True,
     )
 
-    st.markdown("#### Ficha geográfica")
-    geographic_record = pd.DataFrame([{
-        "Proyecto": project_name, "Ubicación": location, "Tomo": active_tomo,
-        "Sistema entrada": coordinate_system,
-        "Este CRTM05 (m)": map_e, "Norte CRTM05 (m)": map_n,
-        "Latitud WGS84": map_lat, "Longitud WGS84": map_lon,
+    st.markdown("#### Resumen geográfico")
+    geo_summary = pd.DataFrame([{
+        'Proyecto':project_name,'Tomo':active_tomo,'Puntos válidos':len(valid_points),
+        'Líneas / tramos':len(project_lines),'CRTM05 central E':map_e,'CRTM05 central N':map_n,
+        'Latitud central':map_lat,'Longitud central':map_lon,
     }])
-    st.dataframe(geographic_record, use_container_width=True, hide_index=True)
+    st.dataframe(geo_summary, use_container_width=True, hide_index=True)
     st.session_state.project_map = {
-        "latitude": map_lat, "longitude": map_lon, "crtm_easting": map_e, "crtm_northing": map_n,
-        "google_maps_url": google_maps_url, "kml_filename": f"{safe_project_name}_ubicacion.kml",
+        'latitude':map_lat,'longitude':map_lon,'crtm_easting':map_e,'crtm_northing':map_n,
+        'google_maps_url':google_maps_url,'kml_filename':f"{safe_project_name}_proyecto_completo.kml",
+        'points':resolved_points,'lines':project_lines,
+        'axis':{'start_lat':axis_start_lat,'start_lon':axis_start_lon,'end_lat':axis_end_lat,'end_lon':axis_end_lon},
     }
-    st.info("El KML contiene el punto central del proyecto. En una siguiente ampliación se pueden agregar sondeos, inicio/fin, tramos homogéneos, puentes, alcantarillas y otras obras como geometrías independientes.")
+
 
 
 with pdash:
