@@ -1,0 +1,59 @@
+name: Integrar controles avanzados 6 7 8 9 10 11 16 18 20
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/add_advanced_design_controls_6_7_8_9_10_11_16_18_20.py'
+      - '.github/workflows/add-advanced-design-controls.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar controles avanzados
+        run: python tools/add_advanced_design_controls_6_7_8_9_10_11_16_18_20.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar integración funcional
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+            '# ADVANCED_DESIGN_CONTROLS_6_7_8_9_10_11_16_18_20',
+            'def stabilized_base_screening_model',
+            'def construction_constraints_check',
+            'def optimize_structure_with_constraints',
+            'def engineering_readiness_score',
+            'def scenario_comparison_table',
+            'Calidad y procedencia de materiales granulares',
+            'Modelo específico de base estabilizada e interfaces',
+            'Restricciones constructivas y optimización automática',
+            'Índice de madurez técnica del diseño',
+            'Comparador de escenarios — sensibilidad estructural',
+            'Registro de cálculo auditable',
+            'Granulares_calidad','Interfaces','Base_estabilizada','Restricciones','Escenarios'
+          ]
+          missing=[x for x in required if x not in t]
+          if missing: raise SystemExit(f'Faltan contratos: {missing}')
+          print('Integración avanzada verificada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar controles avanzados de diseño Tomo I"
+            git push
+          fi
