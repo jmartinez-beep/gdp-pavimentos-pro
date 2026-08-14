@@ -152,6 +152,7 @@ VEHICLE_DEFAULTS = pd.DataFrame(
         ["Buses", "Pesado", 0.65, 20],
         ["Camión C2", "Pesado", 0.80, 35],
         ["Camión C3", "Pesado", 1.40, 20],
+        ["Camión C4", "Pesado", 0.00, 0],
         ["Tractocamión T3-S2", "Pesado", 2.20, 10],
         ["Otros pesados", "Pesado", 1.00, 5],
     ],
@@ -2183,12 +2184,26 @@ with p2:
         current = pd.concat([current.iloc[:1], pickup, current.iloc[1:]], ignore_index=True)
     current.loc[current["Categoría"].eq("Pickup / carga liviana"), "Grupo de tránsito"] = "Carga liviana"
 
+    # VEHICLE_DECIMALS_AND_C4
+    # Compatibilidad con proyectos guardados antes de incorporar explícitamente la categoría C4.
+    if not current["Categoría"].astype(str).str.strip().eq("Camión C4").any():
+        c4 = pd.DataFrame([{
+            "Categoría": "Camión C4",
+            "Grupo de tránsito": "Pesado",
+            "Factor camión": 0.0,
+            "TPD": 0.0,
+        }])
+        c3_idx = current.index[current["Categoría"].astype(str).str.strip().eq("Camión C3")].tolist()
+        insert_at = c3_idx[0] + 1 if c3_idx else len(current)
+        current = pd.concat([current.iloc[:insert_at], c4, current.iloc[insert_at:]], ignore_index=True)
+    current.loc[current["Categoría"].eq("Camión C4"), "Grupo de tránsito"] = "Pesado"
+
     vehicle_editor = current.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
         ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
     ]
     vehicle_editor["Cantidad diaria (veh/día)"] = pd.to_numeric(
         vehicle_editor["Cantidad diaria (veh/día)"], errors="coerce"
-    ).fillna(0).astype(int)
+    ).fillna(0.0).clip(lower=0.0).round(2)
     vehicle_editor["Factor camión"] = pd.to_numeric(
         vehicle_editor["Factor camión"], errors="coerce"
     ).fillna(0.0)
@@ -2212,11 +2227,11 @@ with p2:
             ),
             "Cantidad diaria (veh/día)": st.column_config.NumberColumn(
                 "Cantidad diaria (veh/día)",
-                min_value=0,
-                max_value=1_000_000,
-                step=1,
-                format="%d",
-                help="Cantidad promedio de vehículos por día para esta categoría."
+                min_value=0.0,
+                max_value=1_000_000.0,
+                step=0.01,
+                format="%.2f",
+                help="Cantidad promedio de vehículos por día para esta categoría. Admite hasta 2 decimales."
             ),
             "Factor camión": st.column_config.NumberColumn(
                 "Factor camión",
@@ -2231,7 +2246,7 @@ with p2:
 
     edited_vehicles["Cantidad diaria (veh/día)"] = pd.to_numeric(
         edited_vehicles["Cantidad diaria (veh/día)"], errors="coerce"
-    ).fillna(0).clip(lower=0).astype(int)
+    ).fillna(0.0).clip(lower=0.0).round(2)
     edited_vehicles["Factor camión"] = pd.to_numeric(
         edited_vehicles["Factor camión"], errors="coerce"
     ).fillna(0.0).clip(lower=0.0)
@@ -2283,8 +2298,8 @@ with p2:
     tomo1_category = tomo1_design_category(esal)
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("TPD total", f"{tpd_total:,.0f}")
-    m2.metric("Vehículos pesados", f"{heavy_total:,.0f}", f"{heavy_pct:.2f}%")
+    m1.metric("TPD total", f"{tpd_total:,.2f}")
+    m2.metric("Vehículos pesados", f"{heavy_total:,.2f}", f"{heavy_pct:.2f}%")
     m3.metric("Ejes equivalentes diarios", f"{weighted_daily:,.2f}")
     m4.metric("Factor de crecimiento G", f"{gf:,.3f}")
     m5.metric("EEq acumulado", f"{esal:,.0f}", "Dato complementario Tomo II" if st.session_state.active_tomo == "Tomo II" else f"Categoría {tomo1_category}")
