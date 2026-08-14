@@ -2234,30 +2234,80 @@ with p1:
     loc3.metric("Latitud WGS84", f"{latitude:.7f}°")
     loc4.metric("Longitud WGS84", f"{longitude:.7f}°")
 
+    # PROJECT_MAP_GEOMETRY_MODE
     st.markdown("#### Mapa e inventario geográfico del proyecto")
-    st.caption("El punto principal se actualiza automáticamente con las coordenadas anteriores. Opcionalmente puede agregar sondeos, puentes, alcantarillas, accesos o puntos de inicio/fin y conservarlos dentro del proyecto guardado.")
+    st.caption("Defina la geometría principal como un punto único o como un tramo entre dos puntos. El mapa permite zoom con la rueda del mouse.")
 
-    base_geo_points = pd.DataFrame([{
-        "Nombre": "Punto principal",
-        "Tipo": "Proyecto",
-        "Sistema": "WGS84",
-        "Este_CRTM05": float(crtm_easting),
-        "Norte_CRTM05": float(crtm_northing),
-        "Latitud": float(latitude),
-        "Longitud": float(longitude),
-        "Descripción": str(location),
-    }])
+    geometry_mode = st.segmented_control(
+        "Geometría principal del proyecto",
+        ["Punto único", "Tramo (inicio–fin)"],
+        default=st.session_state.get("project_map_geometry_mode", "Punto único"),
+        key="project_map_geometry_mode",
+    ) or "Punto único"
+
+    main_project_line = []
+    if geometry_mode == "Punto único":
+        base_geo_points = pd.DataFrame([{
+            "Nombre": "Punto principal",
+            "Tipo": "Proyecto",
+            "Sistema": "WGS84",
+            "Este_CRTM05": float(crtm_easting),
+            "Norte_CRTM05": float(crtm_northing),
+            "Latitud": float(latitude),
+            "Longitud": float(longitude),
+            "Descripción": str(location),
+        }])
+    else:
+        st.markdown("##### Coordenadas del tramo")
+        segment_system = st.segmented_control(
+            "Sistema para inicio y fin", ["WGS84", "CRTM05"],
+            default=st.session_state.get("project_segment_system", "WGS84"),
+            key="project_segment_system",
+        ) or "WGS84"
+        if segment_system == "WGS84":
+            sg1, sg2, sg3, sg4 = st.columns(4)
+            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(st.session_state.get("project_segment_start_lat", latitude)), format="%.7f", key="project_segment_start_lat")
+            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(st.session_state.get("project_segment_start_lon", longitude)), format="%.7f", key="project_segment_start_lon")
+            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(st.session_state.get("project_segment_end_lat", latitude)), format="%.7f", key="project_segment_end_lat")
+            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(st.session_state.get("project_segment_end_lon", longitude)), format="%.7f", key="project_segment_end_lon")
+            start_e, start_n = wgs84_to_crtm05(start_lon, start_lat)
+            end_e, end_n = wgs84_to_crtm05(end_lon, end_lat)
+        else:
+            sg1, sg2, sg3, sg4 = st.columns(4)
+            start_e = sg1.number_input("Este inicial CRTM05", value=float(st.session_state.get("project_segment_start_e", crtm_easting)), format="%.3f", key="project_segment_start_e")
+            start_n = sg2.number_input("Norte inicial CRTM05", value=float(st.session_state.get("project_segment_start_n", crtm_northing)), format="%.3f", key="project_segment_start_n")
+            end_e = sg3.number_input("Este final CRTM05", value=float(st.session_state.get("project_segment_end_e", crtm_easting)), format="%.3f", key="project_segment_end_e")
+            end_n = sg4.number_input("Norte final CRTM05", value=float(st.session_state.get("project_segment_end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
+            start_lon, start_lat = crtm05_to_wgs84(start_e, start_n)
+            end_lon, end_lat = crtm05_to_wgs84(end_e, end_n)
+
+        base_geo_points = pd.DataFrame([
+            {"Nombre":"Inicio del tramo","Tipo":"Inicio","Sistema":"WGS84","Este_CRTM05":float(start_e),"Norte_CRTM05":float(start_n),"Latitud":float(start_lat),"Longitud":float(start_lon),"Descripción":str(location)},
+            {"Nombre":"Fin del tramo","Tipo":"Fin","Sistema":"WGS84","Este_CRTM05":float(end_e),"Norte_CRTM05":float(end_n),"Latitud":float(end_lat),"Longitud":float(end_lon),"Descripción":str(location)},
+        ])
+        if is_plausible_costa_rica_wgs84(start_lon, start_lat) and is_plausible_costa_rica_wgs84(end_lon, end_lat):
+            main_project_line = [{
+                "name": "Tramo principal",
+                "description": str(location),
+                "coordinates": [(float(start_lon), float(start_lat)), (float(end_lon), float(end_lat))],
+            }]
+        else:
+            st.warning("Alguno de los extremos del tramo queda fuera del entorno esperado de Costa Rica. Revise las coordenadas.")
     saved_geo = st.session_state.get("project_geo_points_input")
     if isinstance(saved_geo, pd.DataFrame) and not saved_geo.empty:
         geo_editor_seed = saved_geo.copy()
-        main_mask = geo_editor_seed["Tipo"].astype(str).eq("Proyecto") if "Tipo" in geo_editor_seed.columns else pd.Series(False, index=geo_editor_seed.index)
-        if main_mask.any():
-            idx = geo_editor_seed.index[main_mask][0]
-            geo_editor_seed.loc[idx, ["Sistema", "Este_CRTM05", "Norte_CRTM05", "Latitud", "Longitud", "Descripción"]] = [
-                "WGS84", float(crtm_easting), float(crtm_northing), float(latitude), float(longitude), str(location)
-            ]
+        if geometry_mode == "Punto único":
+            main_mask = geo_editor_seed["Tipo"].astype(str).eq("Proyecto") if "Tipo" in geo_editor_seed.columns else pd.Series(False, index=geo_editor_seed.index)
+            if main_mask.any():
+                idx = geo_editor_seed.index[main_mask][0]
+                geo_editor_seed.loc[idx, ["Sistema", "Este_CRTM05", "Norte_CRTM05", "Latitud", "Longitud", "Descripción"]] = [
+                    "WGS84", float(crtm_easting), float(crtm_northing), float(latitude), float(longitude), str(location)
+                ]
+            else:
+                geo_editor_seed = pd.concat([base_geo_points, geo_editor_seed], ignore_index=True)
         else:
-            geo_editor_seed = pd.concat([base_geo_points, geo_editor_seed], ignore_index=True)
+            keep_extra = geo_editor_seed[~geo_editor_seed["Tipo"].astype(str).isin(["Proyecto", "Inicio", "Fin"])].copy() if "Tipo" in geo_editor_seed.columns else pd.DataFrame()
+            geo_editor_seed = pd.concat([base_geo_points, keep_extra], ignore_index=True)
     else:
         geo_editor_seed = base_geo_points
 
@@ -2330,11 +2380,25 @@ with p1:
         center_lon = sum(p["longitude"] for p in valid_geo_points) / len(valid_geo_points)
     else:
         center_lat, center_lon = float(latitude), float(longitude)
+    if geometry_mode == "Tramo (inicio–fin)" and main_project_line:
+        line_coords = main_project_line[0]["coordinates"]
+        fig_project_map.add_trace(go.Scattermapbox(
+            lat=[line_coords[0][1], line_coords[1][1]],
+            lon=[line_coords[0][0], line_coords[1][0]],
+            mode="lines", name="Tramo principal", line=dict(width=6),
+            hovertemplate="<b>Tramo principal</b><extra></extra>",
+        ))
+        center_lat = (line_coords[0][1] + line_coords[1][1]) / 2
+        center_lon = (line_coords[0][0] + line_coords[1][0]) / 2
     fig_project_map.update_layout(
         mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=14),
         height=500, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h"),
     )
-    st.plotly_chart(fig_project_map, use_container_width=True, config={"displaylogo": False})
+    st.plotly_chart(
+        fig_project_map, use_container_width=True,
+        config={"displaylogo": False, "scrollZoom": True, "responsive": True},
+    )
+    st.caption("Use la rueda del mouse sobre el mapa para acercar/alejar; arrastre para desplazarse.")
 
     invalid_count = len(resolved_geo_points) - len(valid_geo_points)
     if invalid_count:
@@ -2344,7 +2408,7 @@ with p1:
     google_maps_url = f"https://www.google.com/maps/search/?api=1&query={float(latitude):.8f},{float(longitude):.8f}"
     map_actions_1.link_button("🌎 Abrir punto principal en Google Maps", google_maps_url, use_container_width=True)
     safe_project_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in str(project_name)).strip('_') or 'Proyecto_GDP'
-    project_kml = project_features_kml(project_name, resolved_geo_points, [])
+    project_kml = project_features_kml(project_name, resolved_geo_points, main_project_line)
     map_actions_2.download_button(
         "⬇️ Descargar puntos KML para Google Earth",
         data=project_kml.encode("utf-8"),
@@ -2366,7 +2430,7 @@ with p1:
         "latitude": float(latitude), "longitude": float(longitude),
         "crtm_easting": float(crtm_easting), "crtm_northing": float(crtm_northing),
         "google_maps_url": google_maps_url, "kml_filename": f"{safe_project_name}_ubicacion.kml",
-        "points": resolved_geo_points,
+        "geometry_mode": geometry_mode, "points": resolved_geo_points, "lines": main_project_line,
     }
     st.caption("Las coordenadas y los puntos adicionales quedan incluidos en el estado guardado del proyecto y en las exportaciones. El mapa es una referencia geográfica; no sustituye levantamiento topográfico ni alineamiento GIS definitivo.")
 
