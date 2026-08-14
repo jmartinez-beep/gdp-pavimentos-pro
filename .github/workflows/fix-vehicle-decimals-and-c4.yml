@@ -1,0 +1,53 @@
+name: Corregir decimales vehiculares y C4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_vehicle_decimals_and_c4.py'
+      - '.github/workflows/fix-vehicle-decimals-and-c4.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar corrección
+        run: python tools/fix_vehicle_decimals_and_c4.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar contrato de tránsito
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+              '# VEHICLE_DECIMALS_AND_C4',
+              '["Camión C4", "Pesado", 0.00, 0]',
+              'step=0.01',
+              'format="%.2f"',
+              '.round(2)',
+              'TPD total", f"{tpd_total:,.2f}"',
+          ]
+          for x in required:
+              assert x in t, x
+          assert 'fillna(0).clip(lower=0).astype(int)' not in t
+          print('Tránsito con 2 decimales y C4 verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Permitir TPD con 2 decimales y agregar C4"
+            git push
+          fi
