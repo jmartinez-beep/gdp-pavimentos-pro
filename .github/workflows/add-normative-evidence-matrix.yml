@@ -1,0 +1,54 @@
+name: Integrar matriz normativa trazable
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/add_normative_evidence_matrix.py'
+      - '.github/workflows/add-normative-evidence-matrix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar matriz normativa
+        run: python tools/add_normative_evidence_matrix.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar integración normativa
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+            'NORMATIVE_SOURCES',
+            'def normative_evidence_table',
+            'Clasificación climática A / B — control documental',
+            'no calcula A/B desde un umbral inventado',
+            'Matriz de evidencia normativa',
+            'Evidencia_normativa',
+            'Pendiente fuente',
+          ]
+          for x in required: assert x in t, x
+          assert 'climate_ab_threshold' not in t
+          assert 'climate_ab_orientation' not in t
+          print('Matriz normativa y bloqueos verificados.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar matriz normativa y bloquear criterios no verificados"
+            git push
+          fi
