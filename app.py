@@ -206,6 +206,20 @@ def traffic_class(esal: float) -> str:
     return "U1"
 
 
+def tomo1_design_category(esal: float) -> int:
+    """GDP-2024 Tomo I, Tabla 102-01: categoría jerárquica por ESAL de diseño."""
+    esal = float(esal or 0.0)
+    if esal < 3_000_000:
+        return 3
+    if esal <= 25_000_000:
+        return 2
+    return 1
+
+
+def tomo1_design_category_label(esal: float) -> str:
+    return f"Categoría {tomo1_design_category(esal)}"
+
+
 def subgrade_class(cbr: float) -> str:
     # Se resuelve el vacío 3-4 mediante criterio conservador.
     if cbr < 4:
@@ -949,13 +963,25 @@ def make_report(payload: Dict) -> str:
     subgrade = payload["subgrade"]
     selected = payload.get("selected")
     costs = payload.get("costs", {})
+    active_tomo = payload.get("active_tomo", "Tomo II")
+    design_category = int(traffic.get("design_category", tomo1_design_category(float(traffic.get("esal", 0.0)))))
+    traffic_class_html = (
+        f"<tr><th>Categoría de diseño Tomo I</th><td>Categoría {design_category}</td></tr>"
+        if active_tomo == "Tomo I"
+        else f"<tr><th>Rango</th><td>{traffic['class']}</td></tr>"
+    )
+    structure_context_html = (
+        f"<tr><th>Categoría de diseño</th><td>Categoría {design_category}</td></tr>"
+        if active_tomo == "Tomo I"
+        else f"<tr><th>Opción</th><td>{selected.get('Opción', 'Estructura seleccionada') if selected else 'Estructura seleccionada'}</td></tr>"
+    )
 
     structure_html = "<p>No se seleccionó una estructura.</p>"
     if selected:
         structure_html = f"""
         <table>
           <tr><th>Código</th><td>{selected['Código']}</td></tr>
-          <tr><th>Opción</th><td>{selected.get('Opción', 'Estructura seleccionada')}</td></tr>
+          {structure_context_html}
           <tr><th>Superficie</th><td>{selected['Superficie']}</td></tr>
           <tr><th>Carpeta</th><td>{selected['Carpeta_cm']} cm</td></tr>
           <tr><th>Base</th><td>{selected['Base_cm']} cm</td></tr>
@@ -993,7 +1019,7 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 <tr><th>Factor direccional</th><td>{traffic['direction_factor']:.3f}</td></tr>
 <tr><th>Factor de carril</th><td>{traffic['lane_factor']:.3f}</td></tr>
 <tr><th>Ejes equivalentes</th><td>{traffic['esal']:,.0f}</td></tr>
-<tr><th>Rango</th><td>{traffic['class']}</td></tr>
+{traffic_class_html}
 </table>
 
 <h2>2. Subrasante</h2>
@@ -1114,6 +1140,9 @@ def build_pdf_report(payload: dict) -> bytes:
     ))
     story.append(Spacer(1,12))
     rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["Crecimiento anual", f"{payload['traffic']['growth_rate']:.2f}%"], ["Factor de crecimiento G", f"{payload['traffic'].get('growth_factor', 0):.3f}"], ["Periodo de diseño", f"{payload['traffic']['years']} años"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
+    if payload.get("active_tomo") == "Tomo I":
+        pdf_category = payload["traffic"].get("design_category", tomo1_design_category(float(payload["traffic"].get("esal", 0.0))))
+        rows.insert(8, ["Categoría de diseño Tomo I", f"Categoría {pdf_category}"])
     climate = payload.get("climate", {})
     rows += [
         ["Clima - modo", str(climate.get("input_mode", ""))],
@@ -1550,13 +1579,26 @@ with p2:
     gf = growth_factor(growth_pct / 100.0, int(years))
     esal = weighted_daily * direction_factor * lane_factor * 365 * gf
     tclass = traffic_class(esal)
+    tomo1_category = tomo1_design_category(esal)
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("TPD total", f"{tpd_total:,.0f}")
     m2.metric("Vehículos pesados", f"{heavy_total:,.0f}", f"{heavy_pct:.2f}%")
     m3.metric("Ejes equivalentes diarios", f"{weighted_daily:,.2f}")
     m4.metric("Factor de crecimiento G", f"{gf:,.3f}")
-    m5.metric("EEq de diseño", f"{esal:,.0f}", tclass)
+    m5.metric("EEq de diseño", f"{esal:,.0f}", tclass if st.session_state.active_tomo == "Tomo II" else f"Categoría {tomo1_category}")
+
+    if st.session_state.active_tomo == "Tomo I":
+        if tomo1_category == 3:
+            category_rule = "ESAL < 3 millones"
+        elif tomo1_category == 2:
+            category_rule = "3 millones ≤ ESAL ≤ 25 millones"
+        else:
+            category_rule = "ESAL > 25 millones"
+        st.success(
+            f"**Clasificación automática Tomo I: Categoría {tomo1_category}** · {category_rule}. "
+            "Referencia: GDP-2024 Tomo I, Tabla 102-01."
+        )
 
     st.latex(r"EEq = 365 \cdot \left[\sum(TPD_i\,FC_i)\right] \cdot FD \cdot FCarril \cdot G, \qquad G=\frac{(1+r)^Y-1}{r}")
     st.info(
@@ -1615,7 +1657,15 @@ with pclima:
         station_selected = st.selectbox("Estación o zona representativa", CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"], index=6)
     with c2:
         depth_mm = st.number_input("Profundidad de evaluación en la mezcla (mm)", min_value=1.0, max_value=500.0, value=35.0, step=1.0, help="Se recomienda evaluar aproximadamente a la profundidad media de la capa asfáltica.")
-        analysis_category = st.selectbox("Categoría de análisis del Tomo I", [1,2,3], index=2)
+        analysis_category = tomo1_design_category(esal)
+        if st.session_state.active_tomo == "Tomo I":
+            st.metric(
+                "Categoría de análisis del Tomo I",
+                f"Categoría {analysis_category}",
+                help="Asignación automática según ESAL de diseño y Tabla 102-01 de la GDP-2024 Tomo I.",
+            )
+        else:
+            st.caption("La categoría jerárquica 1–3 corresponde al Tomo I y se calcula automáticamente a partir del ESAL.")
     with c3:
         temp_data_confirmed = st.checkbox("Fuente y periodo climático documentados", value=False)
         master_curve_confirmed = st.checkbox("Curva maestra / módulos a varias temperaturas disponibles", value=False)
@@ -1910,7 +1960,7 @@ with p4:
 
         st.markdown("#### Control de información para evaluación Tomo I")
         c1, c2, c3, c4 = st.columns(4)
-        c1.success(f"Tránsito: EEq = {esal:,.0f}")
+        c1.success(f"Tránsito: EEq = {esal:,.0f} · Categoría {tomo1_category}")
         c2.success(f"Subrasante: CBR = {cbr_design:.2f}%")
         if temp_data_confirmed:
             c3.success("Clima: fuente documentada")
@@ -2205,7 +2255,7 @@ with pexport:
     if selected_row:
         st.download_button("Descargar sección transversal DXF",build_section_dxf(selected_row,float(width_m if 'width_m' in locals() else 6.0)),"seccion_pavimento.dxf","application/dxf")
     st.download_button("Descargar puntos para Civil 3D (CSV)",build_civil3d_csv(start_e,start_n,azimuth,export_length,interval,elevation),"eje_civil3d.csv","text/csv")
-    props={"tomo":active_tomo,"traffic":tclass,"subgrade":sclass,"cbr":cbr_design,"esal":esal,"structure":selected_row.get('Código','') if selected_row else ''}
+    props={"tomo":active_tomo,"traffic":tclass,"design_category":f"Categoría {tomo1_category}" if active_tomo == "Tomo I" else "No aplica","subgrade":sclass,"cbr":cbr_design,"esal":esal,"structure":selected_row.get('Código','') if selected_row else ''}
     st.download_button("Descargar eje para QGIS (GeoJSON)",build_geojson(project_name,start_lon,start_lat,end_lon,end_lat,props),"eje_proyecto.geojson","application/geo+json")
     st.info("Integración futura prevista: lectura de superficies y alineamientos de Civil 3D, capas GIS del proyecto, estaciones climáticas y exportación de corredores. Esta versión establece formatos de intercambio abiertos.")
 
@@ -2237,6 +2287,8 @@ with p6:
             "lane_factor": lane_factor,
             "esal": esal,
             "class": tclass,
+            "design_category": tomo1_category,
+            "design_category_label": f"Categoría {tomo1_category}",
         },
         "subgrade": {"cbr": cbr_design, "class": sclass, "mr": mr},
         "climate": {
@@ -2296,9 +2348,10 @@ with p6:
         st.warning(f"No fue posible generar el PDF: {exc}")
 
     st.markdown("#### Resumen")
+    classification_summary = f"Categoría {tomo1_category} (Tabla 102-01)" if active_tomo == "Tomo I" else f"rango {tclass}"
     st.write(
         f"Para el proyecto **{project_name}**, se estimaron **{esal:,.0f} ejes equivalentes**, "
-        f"correspondientes al rango **{tclass}**. La subrasante presenta un CBR de diseño de "
+        f"correspondientes a **{classification_summary}**. La subrasante presenta un CBR de diseño de "
         f"**{cbr_design:.2f}%**, clasificación **{sclass}**, y un módulo resiliente estimado de "
         f"**{mr:.2f} MPa**."
     )
@@ -2325,7 +2378,11 @@ with pdash:
     # Tarjetas KPI
     k1,k2,k3,k4,k5,k6 = st.columns(6, gap="small")
     cards=[
-        (k1,"Clasificación de tránsito",tclass,f"ESAL: {esal:,.2e}<br>TPD: {tpd_total:,.0f} veh/día","#218cff"),
+        (k1,
+         "Categoría de diseño" if dash_tomo == "Tomo I" else "Clasificación de tránsito",
+         f"Categoría {tomo1_category}" if dash_tomo == "Tomo I" else tclass,
+         (f"ESAL: {esal:,.2e}<br>Tabla 102-01" if dash_tomo == "Tomo I" else f"ESAL: {esal:,.2e}<br>TPD: {tpd_total:,.0f} veh/día"),
+         "#218cff"),
         (k2,"Vehículos pesados",f"{heavy_pct_dash:.1f}%",f"Pesados: {heavy_total:,.0f} veh/día<br>TPDA estimado: {tpd_total:,.0f}","#3bd56d"),
         (k3,"Subrasante",sclass,f"CBR: {cbr_design:.2f}%<br>Módulo resiliente: {mr:.1f} MPa","#9d50ff"),
         (k4,"Periodo de diseño",f"{int(years)} años",f"Crecimiento: {growth_pct:.2f}%<br>Factor G: {gf:.3f}","#ff831d"),
