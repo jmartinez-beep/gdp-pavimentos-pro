@@ -1,0 +1,45 @@
+name: Corregir informe Tomo II design_category
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_tomo2_report_design_category_none.py'
+      - '.github/workflows/fix-tomo2-report-design-category.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar corrección
+        run: python tools/fix_tomo2_report_design_category_none.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar contrato
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          assert '# FIX_TOMO2_REPORT_DESIGN_CATEGORY_NONE' in t
+          assert 'raw_design_category = traffic.get("design_category")' in t
+          assert 'int(traffic.get("design_category", tomo1_design_category' not in t
+          print('Corrección Tomo II verificada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Corregir informe Tomo II con categoria nula"
+            git push
+          fi
