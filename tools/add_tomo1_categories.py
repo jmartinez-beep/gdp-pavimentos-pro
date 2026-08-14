@@ -74,8 +74,8 @@ replace_once(
     "reemplazar Opción por contexto normativo",
 )
 replace_once(
-    '''<tr><th>Rango</th><td>{traffic['class']}</td></tr>''',
-    '''{traffic_class_html}''',
+    '''<tr><th>Ejes equivalentes</th><td>{traffic['esal']:,.0f}</td></tr>\n<tr><th>Rango</th><td>{traffic['class']}</td></tr>''',
+    '''<tr><th>Ejes equivalentes</th><td>{traffic['esal']:,.0f}</td></tr>\n{traffic_class_html}''',
     "mostrar categoría en tabla de tránsito HTML",
 )
 
