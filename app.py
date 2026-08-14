@@ -2293,14 +2293,15 @@ with p1:
                 plat = float(row.get("Latitud", 0) or 0)
                 plon = float(row.get("Longitud", 0) or 0)
                 pe, pn = wgs84_to_crtm05(plon, plat)
-            pvalid = bool(is_plausible_costa_rica_wgs84(plon, plat))
+            # FIX_PROJECT_MAP_PVALID_COLLISION
+            point_is_valid = bool(is_plausible_costa_rica_wgs84(plon, plat))
         except Exception:
             pe = pn = plat = plon = 0.0
-            pvalid = False
+            point_is_valid = False
         resolved_geo_points.append({
             "name": pname, "type": ptype, "system_input": psystem, "description": pdesc,
             "crtm_easting": float(pe), "crtm_northing": float(pn),
-            "latitude": float(plat), "longitude": float(plon), "valid": pvalid,
+            "latitude": float(plat), "longitude": float(plon), "valid": point_is_valid,
         })
 
     valid_geo_points = [p for p in resolved_geo_points if p["valid"]]
