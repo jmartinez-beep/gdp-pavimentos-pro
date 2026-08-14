@@ -3687,17 +3687,24 @@ with p6:
 
 with pdash:
     # Dashboard profesional v0.9.1: una sola vista de control, similar al tablero de referencia.
+    # SINGLE_TOMO_SELECTOR_DASHBOARD
     heavy_pct_dash = (heavy_total / tpd_total * 100.0) if tpd_total else 0.0
     selected_dash = selected_row or st.session_state.get("selected_row")
     selected_total = float(st.session_state.get("total_thickness", total_thickness or 0.0))
+    dash_tomo = active_tomo
 
     # Encabezado superior
     hleft, hcenter, hright = st.columns([1.0, 2.2, 1.15], gap="small")
     with hleft:
-        st.markdown("<div class='panel-card'><div class='panel-title'>Normativa activa</div>", unsafe_allow_html=True)
-        dash_tomo = st.segmented_control("", ["Tomo I", "Tomo II"], default=st.session_state.active_tomo, key="dash_tomo_selector", label_visibility="collapsed") or st.session_state.active_tomo
-        st.session_state.active_tomo = dash_tomo
-        st.markdown("</div>", unsafe_allow_html=True)
+        tomo_label = "Tomo I" if dash_tomo == "Tomo I" else "Tomo II"
+        tomo_method = "Diseño mecanístico-empírico" if dash_tomo == "Tomo I" else "Catálogo simplificado"
+        tomo_icon = "📗" if dash_tomo == "Tomo I" else "📘"
+        st.markdown(
+            f"<div class='panel-card'><div class='panel-title'>Normativa activa</div>"
+            f"<div style='font-size:1.45rem;font-weight:900;color:#fff'>{tomo_icon} {tomo_label}</div>"
+            f"<div style='color:#9eb3c8;margin-top:5px'>{tomo_method}</div></div>",
+            unsafe_allow_html=True,
+        )
     with hcenter:
         st.markdown(f"""<div class='panel-card'><div class='panel-title'>Proyecto</div><b>{project_name}</b><br><span style='color:#9eb3c8'>Ubicación: {location} &nbsp; | &nbsp; Tipo: {road_type} &nbsp; | &nbsp; Pavimento: {pavement_type}</span></div>""", unsafe_allow_html=True)
     with hright:
