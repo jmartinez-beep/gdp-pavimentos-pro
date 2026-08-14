@@ -243,6 +243,97 @@ def money(value: float) -> str:
     return f"₡{value:,.0f}".replace(",", " ")
 
 
+# MECHANISTIC_SCREENING_PHASE2
+def _circular_load_vertical_stress(q_mpa: float, radius_m: float, depth_m: float) -> float:
+    """Esfuerzo vertical bajo el centro de un área circular uniformemente cargada.
+
+    Se usa únicamente como núcleo de cribado de respuesta. No reemplaza un solver
+    elástico multicapa (Burmister/ME) ni incorpora interacción completa entre neumáticos.
+    """
+    q_mpa = max(float(q_mpa), 0.0)
+    a = max(float(radius_m), 1e-6)
+    z = max(float(depth_m), 1e-6)
+    return q_mpa * (1.0 - 1.0 / ((1.0 + (a / z) ** 2) ** 1.5))
+
+
+def _odemark_equivalent_depth(layers: list[tuple[float, float]], reference_modulus_mpa: float) -> float:
+    """Profundidad transformada tipo Odemark para el cribado de tensiones verticales."""
+    eref = max(float(reference_modulus_mpa), 1e-6)
+    total = 0.0
+    for thickness_m, modulus_mpa in layers:
+        if thickness_m <= 0:
+            continue
+        ratio = max(float(modulus_mpa), 1e-6) / eref
+        total += float(thickness_m) * ratio ** (1.0 / 3.0)
+    return max(total, 1e-6)
+
+
+def mechanistic_screening_response(structure: Dict, materials: dict, subgrade_mr_mpa: float,
+                                    axle_load_kn: float, tire_pressure_kpa: float, tires_per_axle: int,
+                                    base_poisson: float = 0.35, subbase_poisson: float = 0.35,
+                                    subgrade_poisson: float = 0.40) -> dict:
+    """Respuesta mecanística de cribado para control interno del Tomo I.
+
+    Usa presión circular uniforme + profundidad equivalente tipo Odemark. La deformación
+    de tracción bajo carpeta es un indicador de cribado basado en contraste de rigideces;
+    no es una solución multicapa cerrada. Los resultados deben validarse con un solver
+    multicapa y funciones de transferencia calibradas antes de una emisión definitiva.
+    """
+    axle_load_kn = max(float(axle_load_kn), 0.1)
+    tire_pressure_kpa = max(float(tire_pressure_kpa), 1.0)
+    tires = max(int(tires_per_axle), 1)
+    tire_load_n = axle_load_kn * 1000.0 / tires
+    pressure_pa = tire_pressure_kpa * 1000.0
+    radius_m = math.sqrt(tire_load_n / (math.pi * pressure_pa))
+    q_mpa = tire_pressure_kpa / 1000.0
+
+    h_ac = max(float(structure.get("Carpeta_cm", 0) or 0) / 100.0, 0.0)
+    h_bg = max(float(structure.get("Base_granular_cm", structure.get("Base_cm", 0)) or 0) / 100.0, 0.0)
+    h_bs = max(float(structure.get("Base_estabilizada_cm", 0) or 0) / 100.0, 0.0)
+    h_sb = max(float(structure.get("Subbase_cm", 0) or 0) / 100.0, 0.0)
+    h_imp = max(float(structure.get("Mejoramiento_subrasante_cm", 0) or 0) / 100.0, 0.0)
+
+    e_ac = max(float(materials.get("asphalt_dynamic_modulus_mpa", 0) or 0), 1.0)
+    nu_ac = min(max(float(materials.get("asphalt_poisson", 0.35) or 0.35), 0.10), 0.49)
+    e_bg = max(float(materials.get("base_mr_mpa", 0) or 0), 1.0)
+    e_sb = max(float(materials.get("subbase_mr_mpa", 0) or 0), 1.0)
+    e_bs = max(float(materials.get("stabilized_modulus_mpa", 0) or 0), 1.0)
+    strength_bs = max(float(materials.get("stabilized_strength_mpa", 0) or 0), 0.0)
+    e_sg = max(float(subgrade_mr_mpa), 1.0)
+
+    # Profundidades equivalentes para esfuerzos verticales sobre interfaces críticas.
+    z_ac = max(h_ac, radius_m * 0.20, 0.01)
+    z_sg = _odemark_equivalent_depth(
+        [(h_ac, e_ac), (h_bg, e_bg), (h_bs, e_bs), (h_sb, e_sb), (h_imp, max(e_sb, e_sg))], e_sg
+    )
+    sigma_ac = _circular_load_vertical_stress(q_mpa, radius_m, z_ac)
+    sigma_sg = _circular_load_vertical_stress(q_mpa, radius_m, z_sg)
+
+    support_modulus = e_bs if h_bs > 0 else (e_bg if h_bg > 0 else (e_sb if h_sb > 0 else e_sg))
+    stiffness_contrast = min(3.0, max(0.60, (e_ac / max(support_modulus, 1.0)) ** 0.15))
+    eps_t_micro = sigma_ac * (1.0 + nu_ac) / e_ac * stiffness_contrast * 1_000_000.0
+    eps_v_micro = sigma_sg / e_sg * max(0.40, 1.0 - 0.50 * float(subgrade_poisson)) * 1_000_000.0
+
+    stabilized_stress_mpa = 0.0
+    stabilized_utilization = 0.0
+    if h_bs > 0:
+        layers_above_bs = [(h_ac, e_ac), (h_bg, e_bg)]
+        z_bs = _odemark_equivalent_depth(layers_above_bs, e_bs) if layers_above_bs else max(h_ac, 0.01)
+        stabilized_stress_mpa = _circular_load_vertical_stress(q_mpa, radius_m, max(z_bs, 0.01))
+        stabilized_utilization = stabilized_stress_mpa / strength_bs if strength_bs > 0 else 0.0
+
+    return {
+        "method": "Cribado: carga circular uniforme + profundidad equivalente tipo Odemark",
+        "axle_load_kn": axle_load_kn, "tires_per_axle": tires, "tire_load_kn": tire_load_n / 1000.0,
+        "tire_pressure_kpa": tire_pressure_kpa, "contact_radius_m": radius_m,
+        "sigma_bottom_asphalt_mpa": sigma_ac, "asphalt_tensile_microstrain_screening": eps_t_micro,
+        "sigma_top_subgrade_mpa": sigma_sg, "subgrade_vertical_microstrain_screening": eps_v_micro,
+        "stabilized_stress_mpa": stabilized_stress_mpa, "stabilized_stress_strength_ratio": stabilized_utilization,
+        "equivalent_depth_to_subgrade_m": z_sg,
+        "limitations": "No sustituye un solver elástico multicapa ni funciones de transferencia calibradas GDP-2024.",
+    }
+
+
 def _box_mesh(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float, name: str, color: str):
     """Caja sólida simple usada para la plataforma visual."""
     x = [x0, x1, x1, x0, x0, x1, x1, x0]
@@ -941,12 +1032,14 @@ def render_gdp_scope_alerts(active_tomo: str, tpd_total: float, heavy_pct: float
 
 def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, esal: float, cbr: float, pavement_temp: float, drainage: dict,
                          geometry: dict | None = None, subgrade_details: dict | None = None,
-                         materials: dict | None = None, reliability: dict | None = None) -> pd.DataFrame:
+                         materials: dict | None = None, reliability: dict | None = None,
+                         mechanistic: dict | None = None) -> pd.DataFrame:
     """Matriz trazable de validación. No reemplaza la revisión profesional."""
     geometry = geometry or {}
     subgrade_details = subgrade_details or {}
     materials = materials or {}
     reliability = reliability or {}
+    mechanistic = mechanistic or {}
     checks = []
     def add(category, criterion, ok, severity, evidence):
         checks.append({"Categoría":category,"Criterio":criterion,"Estado":"Cumple" if ok else "Revisar","Severidad":severity,"Evidencia":evidence})
@@ -963,6 +1056,10 @@ def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, es
         add("Materiales", "Módulo de mezcla asfáltica registrado", float(materials.get("asphalt_dynamic_modulus_mpa",0) or 0) > 0, "Alta", f"E*={float(materials.get('asphalt_dynamic_modulus_mpa',0) or 0):.0f} MPa")
         add("Materiales", "Fuente de caracterización documentada", bool(str(materials.get("source","")).strip()), "Media", str(materials.get("source","Sin definir")))
         add("Confiabilidad", "Parámetro de confiabilidad definido", float(reliability.get("reliability_pct",0) or 0) >= 50, "Alta", f"R={float(reliability.get('reliability_pct',0) or 0):.0f}%")
+        add("Respuesta ME", "Cribado mecanístico ejecutado", bool(mechanistic), "Alta", str(mechanistic.get("method", "No ejecutado")))
+        if mechanistic:
+            add("Fatiga", "εt dentro del criterio configurado", float(mechanistic.get("fatigue_utilization_ratio",99) or 99) <= 1.0, "Alta", f"Utilización={float(mechanistic.get('fatigue_utilization_ratio',0) or 0):.2f}")
+            add("Ahuellamiento", "εv dentro del criterio configurado", float(mechanistic.get("rutting_utilization_ratio",99) or 99) <= 1.0, "Alta", f"Utilización={float(mechanistic.get('rutting_utilization_ratio',0) or 0):.2f}")
     if active_tomo == "Tomo II":
         add("Alcance Tomo II", "ESAL ≤ 1,5 millones", esal <= 1_500_000, "Alta", f"{esal:,.0f} ESAL")
         add("Alcance Tomo II", "CBR ≥ 3%", cbr >= 3.0, "Alta", f"CBR {cbr:.2f}%")
@@ -980,6 +1077,7 @@ def make_report(payload: Dict) -> str:
     geometry = payload.get("geometry", {})
     materials = payload.get("materials", {})
     reliability = payload.get("reliability", {})
+    mechanistic = payload.get("mechanistic_screening", {})
     costs = payload.get("costs", {})
     active_tomo = payload.get("active_tomo", "Tomo II")
     design_category = int(traffic.get("design_category", tomo1_design_category(float(traffic.get("esal", 0.0)))))
@@ -1074,7 +1172,17 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 <tr><th>Confiabilidad</th><td>{reliability.get('reliability_pct',0):.1f}%</td></tr>
 </table>
 
-<h2>5. Estimación económica</h2>
+<h2>5. Respuesta mecanística de cribado</h2>
+<table>
+<tr><th>Método</th><td>{mechanistic.get('method','No ejecutado')}</td></tr>
+<tr><th>Carga de eje</th><td>{mechanistic.get('axle_load_kn',0):.1f} kN</td></tr>
+<tr><th>Presión de contacto</th><td>{mechanistic.get('tire_pressure_kpa',0):.0f} kPa</td></tr>
+<tr><th>εt bajo carpeta</th><td>{mechanistic.get('asphalt_tensile_microstrain_screening',0):.0f} µε · utilización {mechanistic.get('fatigue_utilization_ratio',0):.2f}</td></tr>
+<tr><th>εv sobre subrasante</th><td>{mechanistic.get('subgrade_vertical_microstrain_screening',0):.0f} µε · utilización {mechanistic.get('rutting_utilization_ratio',0):.2f}</td></tr>
+</table>
+<p class='note'>Cribado preliminar: no sustituye un solver elástico multicapa ni funciones de transferencia calibradas GDP-2024.</p>
+
+<h2>6. Estimación económica</h2>
 <table>
 <tr><th>Área</th><td>{costs.get('area', 0):,.2f} m²</td></tr>
 <tr><th>Costo estimado</th><td>{money(costs.get('total', 0))}</td></tr>
@@ -1153,6 +1261,7 @@ def build_excel_workbook(payload: dict, vehicles_df: pd.DataFrame, alternatives_
         pd.DataFrame([payload.get("geometry", {})]).to_excel(writer, sheet_name="Geometria", index=False)
         pd.DataFrame([payload.get("materials", {})]).to_excel(writer, sheet_name="Materiales", index=False)
         pd.DataFrame([payload.get("reliability", {})]).to_excel(writer, sheet_name="Confiabilidad", index=False)
+        pd.DataFrame([payload.get("mechanistic_screening", {})]).to_excel(writer, sheet_name="Respuesta_ME", index=False)
         climate_payload = dict(payload.get("climate", {}))
         monthly_rows = climate_payload.pop("monthly_table", [])
         pd.DataFrame([climate_payload]).to_excel(writer, sheet_name="Clima", index=False)
@@ -1192,12 +1301,16 @@ def build_pdf_report(payload: dict) -> bytes:
     geometry = payload.get("geometry", {})
     materials = payload.get("materials", {})
     reliability = payload.get("reliability", {})
+    mechanistic = payload.get("mechanistic_screening", {})
     rows += [
         ["Longitud de diseño", f"{geometry.get('length_m', 0):,.1f} m"],
         ["Ancho de referencia", f"{geometry.get('paved_reference_width_m', 0):,.2f} m"],
         ["Fuente Mr subrasante", str(payload.get("subgrade", {}).get("mr_source", ""))],
         ["E* mezcla asfáltica", f"{materials.get('asphalt_dynamic_modulus_mpa',0):,.0f} MPa"],
         ["Confiabilidad", f"{reliability.get('reliability_pct',0):.1f}%"],
+        ["Cribado εt bajo carpeta", f"{mechanistic.get('asphalt_tensile_microstrain_screening',0):.0f} µε"],
+        ["Cribado εv sobre subrasante", f"{mechanistic.get('subgrade_vertical_microstrain_screening',0):.0f} µε"],
+        ["Utilización fatiga / ahuellamiento", f"{mechanistic.get('fatigue_utilization_ratio',0):.2f} / {mechanistic.get('rutting_utilization_ratio',0):.2f}"],
         ["Clima - modo", str(climate.get("input_mode", ""))],
         ["Clima - fuente", str(climate.get("source", ""))],
         ["Clima - periodo", str(climate.get("period", ""))],
@@ -2149,16 +2262,91 @@ with pflex:
         sn1=a1*d1; sn2=a2*m2*d2; sn3=a3*m3*d3; sn_total=sn1+sn2+sn3
         c1,c2,c3,c4=st.columns(4); c1.metric("SN carpeta",f"{sn1:.2f}"); c2.metric("SN base",f"{sn2:.2f}"); c3.metric("SN subbase",f"{sn3:.2f}"); c4.metric("SN aportado",f"{sn_total:.2f}")
         st.progress(min(sn_total/6.0,1.0), text="Indicador relativo del aporte estructural")
+
+        st.markdown("### Respuesta mecanística de cribado — Tomo I")
+        st.warning(
+            "Este bloque todavía **no es un solver elástico multicapa definitivo**. Calcula indicadores transparentes de respuesta "
+            "para revisar la coherencia de carga, rigidez y espesores. La emisión final requiere validar estos resultados con "
+            "un motor multicapa y funciones de transferencia calibradas/aplicables al GDP-2024."
+        )
+        ml1, ml2, ml3, ml4 = st.columns(4)
+        axle_load_kn = ml1.number_input("Carga del eje de análisis (kN)", min_value=10.0, max_value=300.0, value=80.0, step=5.0, key="mech_axle_load")
+        tire_pressure_kpa = ml2.number_input("Presión de contacto/neumático (kPa)", min_value=200.0, max_value=1500.0, value=700.0, step=25.0, key="mech_tire_pressure")
+        tires_per_axle = ml3.number_input("Neumáticos equivalentes por eje", min_value=1, max_value=12, value=4, step=1, key="mech_tires_per_axle")
+        subgrade_poisson = ml4.number_input("Poisson subrasante", min_value=0.20, max_value=0.49, value=0.40, step=0.01, key="mech_subgrade_nu")
+        crit1, crit2, crit3 = st.columns(3)
+        allowable_eps_t = crit1.number_input("Criterio de control εt bajo carpeta (µε)", min_value=10.0, max_value=5000.0, value=200.0, step=10.0, key="mech_allow_eps_t", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
+        allowable_eps_v = crit2.number_input("Criterio de control εv sobre subrasante (µε)", min_value=10.0, max_value=10000.0, value=500.0, step=10.0, key="mech_allow_eps_v", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
+        allowable_stabilized_ratio = crit3.number_input("Relación esfuerzo/resistencia admisible base estabilizada", min_value=0.05, max_value=1.50, value=0.50, step=0.05, key="mech_allow_stab_ratio")
+
+        materials_for_response = st.session_state.get("design_materials", {})
+        mech_response = mechanistic_screening_response(
+            selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
+            subgrade_poisson=float(subgrade_poisson),
+        )
+        fatigue_util = mech_response["asphalt_tensile_microstrain_screening"] / max(float(allowable_eps_t), 1e-6)
+        rut_util = mech_response["subgrade_vertical_microstrain_screening"] / max(float(allowable_eps_v), 1e-6)
+        stab_util = mech_response["stabilized_stress_strength_ratio"] / max(float(allowable_stabilized_ratio), 1e-6) if mech_response["stabilized_stress_strength_ratio"] > 0 else 0.0
+        mech_response.update({
+            "allowable_asphalt_tensile_microstrain": float(allowable_eps_t),
+            "allowable_subgrade_vertical_microstrain": float(allowable_eps_v),
+            "allowable_stabilized_stress_strength_ratio": float(allowable_stabilized_ratio),
+            "fatigue_utilization_ratio": float(fatigue_util),
+            "rutting_utilization_ratio": float(rut_util),
+            "stabilized_utilization_ratio": float(stab_util),
+        })
+        st.session_state.mechanistic_screening = mech_response
+
+        mr1, mr2, mr3, mr4 = st.columns(4)
+        mr1.metric("Radio de contacto", f"{mech_response['contact_radius_m']*1000:.0f} mm")
+        mr2.metric("εt bajo carpeta — cribado", f"{mech_response['asphalt_tensile_microstrain_screening']:.0f} µε", f"Utilización {fatigue_util:.2f}")
+        mr3.metric("εv sobre subrasante — cribado", f"{mech_response['subgrade_vertical_microstrain_screening']:.0f} µε", f"Utilización {rut_util:.2f}")
+        mr4.metric("Profundidad equivalente", f"{mech_response['equivalent_depth_to_subgrade_m']:.2f} m")
+
+        response_df = pd.DataFrame([
+            ["Carga por neumático", mech_response["tire_load_kn"], "kN", "Entrada derivada"],
+            ["Esfuerzo indicador bajo carpeta", mech_response["sigma_bottom_asphalt_mpa"], "MPa", "Cribado"],
+            ["Deformación tracción bajo carpeta", mech_response["asphalt_tensile_microstrain_screening"], "µε", "Cribado fatiga"],
+            ["Esfuerzo indicador sobre subrasante", mech_response["sigma_top_subgrade_mpa"], "MPa", "Cribado"],
+            ["Deformación vertical sobre subrasante", mech_response["subgrade_vertical_microstrain_screening"], "µε", "Cribado ahuellamiento"],
+            ["Esfuerzo base estabilizada", mech_response["stabilized_stress_mpa"], "MPa", "Cribado semirrígido"],
+        ], columns=["Respuesta", "Valor", "Unidad", "Uso"])
+        st.dataframe(response_df, use_container_width=True, hide_index=True)
+        if fatigue_util > 1.0:
+            st.error("El indicador εt supera el criterio de control configurado. Revise espesor/rigidez de carpeta, soporte y carga antes de avanzar.")
+        else:
+            st.success("El indicador εt se mantiene dentro del criterio de control configurado para este cribado.")
+        if rut_util > 1.0:
+            st.error("El indicador εv sobre subrasante supera el criterio configurado. Revise capas granulares, mejoramiento, Mr y drenaje.")
+        else:
+            st.success("El indicador εv se mantiene dentro del criterio de control configurado para este cribado.")
+        if mech_response["stabilized_stress_strength_ratio"] > 0:
+            if mech_response["stabilized_stress_strength_ratio"] > allowable_stabilized_ratio:
+                st.error("La relación esfuerzo/resistencia de cribado de la base estabilizada supera el criterio configurado.")
+            else:
+                st.success("La base estabilizada se mantiene dentro del criterio esfuerzo/resistencia configurado para este cribado.")
+        st.caption("Método del bloque: " + mech_response["method"] + ". " + mech_response["limitations"])
+
         if float(selected_row['Carpeta_cm']) <= 0 and selected_row['Superficie'] == 'Tratamiento superficial': st.warning("La alternativa usa tratamiento superficial; revise que el nivel de tránsito, el desempeño esperado y los materiales sean compatibles con el alcance del catálogo.")
         if tp_ltpp >= 45: st.warning("Temperatura alta del pavimento: revise el módulo dinámico de la mezcla y el riesgo de ahuellamiento.")
         if m2 < 0.8 or m3 < 0.8: st.warning("Los coeficientes de drenaje reducen de forma importante el aporte estructural de las capas granulares.")
-        st.session_state.flex_design={"a1":a1,"a2":a2,"a3":a3,"m2":m2,"m3":m3,"sn":sn_total,"reliability_pct":reliability_pct,"overall_standard_error":overall_standard_error,"initial_serviceability":initial_serviceability,"terminal_serviceability":terminal_serviceability}
+        st.session_state.flex_design={"a1":a1,"a2":a2,"a3":a3,"m2":m2,"m3":m3,"sn":sn_total,"reliability_pct":reliability_pct,"overall_standard_error":overall_standard_error,"initial_serviceability":initial_serviceability,"terminal_serviceability":terminal_serviceability,"mechanistic_screening":st.session_state.get("mechanistic_screening",{})}
     else: st.info("Seleccione una estructura para activar el diseño flexible.")
 
 with pperf:
     st.subheader("Monitoreo de deterioro — evaluación preliminar del Tomo I")
     st.warning("Las curvas son indicadores preliminares normalizados para comparar escenarios. Para emitir un diseño final deben sustituirse por la respuesta multicapa, modelos constitutivos y calibraciones aplicables del Tomo I.")
     if selected_row:
+        mech_state = st.session_state.get("mechanistic_screening", {})
+        if mech_state:
+            st.markdown("#### Vínculo con respuesta estructural")
+            ms1, ms2, ms3 = st.columns(3)
+            ms1.metric("Utilización fatiga εt", f"{float(mech_state.get('fatigue_utilization_ratio',0)):.2f}")
+            ms2.metric("Utilización ahuellamiento εv", f"{float(mech_state.get('rutting_utilization_ratio',0)):.2f}")
+            ms3.metric("Carga de análisis", f"{float(mech_state.get('axle_load_kn',0)):.0f} kN")
+            st.info("Estas utilizaciones sirven para priorizar revisión estructural. Las curvas de deterioro inferiores continúan siendo preliminares y todavía no constituyen funciones de transferencia GDP calibradas.")
+        else:
+            st.warning("Ejecute primero la respuesta mecanística de cribado en **6. Diseño flexible** para vincular deformaciones críticas con este módulo.")
         pc1,pc2,pc3,pc4 = st.columns(4)
         with pc1:
             perf_years = st.number_input("Horizonte de monitoreo (años)", 1, 40, int(years), key="perf_years")
@@ -2346,7 +2534,7 @@ with pvalid:
             active_tomo, selected_row, exact_match, esal, cbr_design, tp_ltpp,
             st.session_state.get("drainage", {}), st.session_state.get("project_geometry", {}),
             st.session_state.get("subgrade_details", {}), st.session_state.get("design_materials", {}),
-            st.session_state.get("design_reliability", {}),
+            st.session_state.get("design_reliability", {}), st.session_state.get("mechanistic_screening", {}),
         )
         n_ok = int((validation_df["Estado"]=="Cumple").sum()); n_total=len(validation_df)
         v1,v2,v3=st.columns(3)
@@ -2445,6 +2633,7 @@ with p6:
         "geometry": st.session_state.get("project_geometry", {}),
         "materials": st.session_state.get("design_materials", {}) if active_tomo == "Tomo I" else {},
         "reliability": st.session_state.get("design_reliability", {}) if active_tomo == "Tomo I" else {},
+        "mechanistic_screening": st.session_state.get("mechanistic_screening", {}) if active_tomo == "Tomo I" else {},
         "climate": {
             "input_mode": climate_input_mode,
             "source": climate_source,
