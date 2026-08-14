@@ -6,6 +6,7 @@ import math
 import zipfile
 from dataclasses import dataclass, asdict
 from datetime import date
+from statistics import NormalDist
 from typing import Dict, List
 import os
 
@@ -244,6 +245,137 @@ def money(value: float) -> str:
 
 
 # MECHANISTIC_SCREENING_PHASE2
+# INTEGRATED_STAGES_2_5_9_10_11_12_13_18
+def reliability_multiplier(reliability_pct: float, log_sigma: float) -> float:
+    """Amplificador lognormal configurable para llevar una respuesta media a nivel de diseño.
+
+    No es una ecuación GDP normativa. Se usa para que la confiabilidad afecte el resultado
+    cuando el diseñador activa explícitamente este modelo configurable.
+    """
+    r = min(max(float(reliability_pct) / 100.0, 0.5001), 0.999)
+    z = NormalDist().inv_cdf(r)
+    return math.exp(z * max(float(log_sigma), 0.0))
+
+
+def configurable_transfer_damage(mech: dict, esal: float, climate_factor: float, reliability_pct: float,
+                                 log_sigma: float, reference_esal: float, fatigue_exponent: float,
+                                 rutting_exponent: float) -> dict:
+    """Índices de daño configurables basados en utilización mecanística.
+
+    D = (utilización ** exponente) * (ESAL / ESAL_ref) * factor_climático.
+    Luego se amplifica por confiabilidad lognormal. El usuario debe calibrar parámetros
+    para su procedimiento/proyecto; no se presenta como función de transferencia GDP oficial.
+    """
+    ref = max(float(reference_esal), 1.0)
+    climate = max(float(climate_factor), 0.01)
+    f_util = max(float(mech.get('fatigue_utilization_ratio', 0.0) or 0.0), 0.0)
+    r_util = max(float(mech.get('rutting_utilization_ratio', 0.0) or 0.0), 0.0)
+    traffic_ratio = max(float(esal), 0.0) / ref
+    fatigue_mean = (f_util ** max(float(fatigue_exponent), 0.01)) * traffic_ratio * climate
+    rutting_mean = (r_util ** max(float(rutting_exponent), 0.01)) * traffic_ratio * climate
+    mult = reliability_multiplier(reliability_pct, log_sigma)
+    return {
+        'method': 'Función de transferencia configurable por utilización; pendiente de calibración específica',
+        'reference_esal': ref, 'climate_factor': climate, 'reliability_multiplier': mult,
+        'fatigue_damage_mean': fatigue_mean, 'rutting_damage_mean': rutting_mean,
+        'fatigue_damage_design': fatigue_mean * mult, 'rutting_damage_design': rutting_mean * mult,
+        'fatigue_exponent': float(fatigue_exponent), 'rutting_exponent': float(rutting_exponent),
+        'calibration_status': 'Configurable / no normativa',
+    }
+
+
+def monthly_material_climate_factor(monthly_modulus_df: pd.DataFrame, reference_modulus_mpa: float) -> float:
+    """Factor climático relativo derivado de E* mensual documentado por el usuario."""
+    if monthly_modulus_df is None or monthly_modulus_df.empty:
+        return 1.0
+    vals = pd.to_numeric(monthly_modulus_df.get('E* mensual (MPa)', pd.Series(dtype=float)), errors='coerce').dropna()
+    if vals.empty:
+        return 1.0
+    ref = max(float(reference_modulus_mpa), 1.0)
+    # Menor rigidez relativa aumenta el factor de exposición; promedio mensual simple.
+    ratios = (ref / vals.clip(lower=1.0)).clip(lower=0.25, upper=4.0)
+    return float(ratios.mean())
+
+
+def optimize_screening_structure(base_structure: Dict, materials: dict, subgrade_mr_mpa: float,
+                                 axle_load_kn: float, tire_pressure_kpa: float, tires_per_axle: int,
+                                 allowable_eps_t: float, allowable_eps_v: float, reliability_pct: float,
+                                 log_sigma: float, area_m2: float, prices: dict, max_increment_cm: int = 12) -> pd.DataFrame:
+    """Explora combinaciones discretas alrededor de la sección activa usando el cribado ME.
+
+    Solo genera candidatos para revisión. No constituye optimización normativa GDP.
+    """
+    rows = []
+    ac0 = float(base_structure.get('Carpeta_cm', 0) or 0)
+    bg0 = float(base_structure.get('Base_granular_cm', base_structure.get('Base_cm', 0)) or 0)
+    bs0 = float(base_structure.get('Base_estabilizada_cm', 0) or 0)
+    sb0 = float(base_structure.get('Subbase_cm', 0) or 0)
+    imp0 = float(base_structure.get('Mejoramiento_subrasante_cm', 0) or 0)
+    step = 2.0
+    increments = list(range(0, int(max_increment_cm) + 1, int(step)))
+    rel_mult = reliability_multiplier(reliability_pct, log_sigma)
+    for da in increments:
+        for db in increments:
+            for ds in increments:
+                s = dict(base_structure)
+                s['Carpeta_cm'] = ac0 + da
+                s['Base_granular_cm'] = bg0 + db
+                s['Base_estabilizada_cm'] = bs0
+                s['Base_cm'] = bg0 + db + bs0
+                s['Subbase_cm'] = sb0 + ds
+                s['Mejoramiento_subrasante_cm'] = imp0
+                resp = mechanistic_screening_response(s, materials, subgrade_mr_mpa, axle_load_kn, tire_pressure_kpa, tires_per_axle)
+                fu = resp['asphalt_tensile_microstrain_screening'] / max(float(allowable_eps_t), 1e-6)
+                ru = resp['subgrade_vertical_microstrain_screening'] / max(float(allowable_eps_v), 1e-6)
+                fu_d = fu * rel_mult
+                ru_d = ru * rel_mult
+                cost = float(area_m2) * (
+                    s['Carpeta_cm'] / 100.0 * float(prices.get('surface', 0)) +
+                    s['Base_cm'] / 100.0 * float(prices.get('base', 0)) +
+                    s['Subbase_cm'] / 100.0 * float(prices.get('subbase', 0))
+                )
+                compliant = fu_d <= 1.0 and ru_d <= 1.0
+                rows.append({
+                    'Código': f"OPT-{int(ac0+da):02d}-{int(bg0+db):02d}-{int(sb0+ds):02d}",
+                    'Superficie': s.get('Superficie', 'Carpeta asfáltica'),
+                    'Carpeta_cm': s['Carpeta_cm'], 'Base_cm': s['Base_cm'],
+                    'Base_granular_cm': s['Base_granular_cm'], 'Base_estabilizada_cm': s['Base_estabilizada_cm'],
+                    'Subbase_cm': s['Subbase_cm'], 'Mejoramiento_subrasante_cm': s['Mejoramiento_subrasante_cm'],
+                    'Espesor_total_cm': s['Carpeta_cm'] + s['Base_cm'] + s['Subbase_cm'] + s['Mejoramiento_subrasante_cm'],
+                    'Utilización_fatiga_diseño': fu_d, 'Utilización_ahuellamiento_diseño': ru_d,
+                    'Máxima_utilización': max(fu_d, ru_d), 'Cumple_cribado': 'Sí' if compliant else 'No',
+                    'Costo_inicial': cost, 'Coincidencia': 'Tomo I - candidato de cribado',
+                })
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values(['Cumple_cribado', 'Costo_inicial', 'Máxima_utilización'], ascending=[False, True, True]).reset_index(drop=True)
+    return out
+
+
+def design_data_quality_score(payload: dict) -> tuple[int, list[dict]]:
+    """Índice documental, no normativo, para identificar vacíos del expediente."""
+    project = payload.get('project', {})
+    traffic = payload.get('traffic', {})
+    subgrade = payload.get('subgrade', {})
+    climate = payload.get('climate', {})
+    materials = payload.get('materials', {})
+    drainage = payload.get('drainage', {})
+    mech = payload.get('mechanistic_screening', {})
+    checks = [
+        ('Proyecto y geometría', bool(project.get('name')) and float(project.get('length_m', 0) or 0) > 0),
+        ('Tránsito / ESAL', float(traffic.get('esal', 0) or 0) > 0),
+        ('Subrasante / CBR', float(subgrade.get('cbr', 0) or 0) > 0),
+        ('Fuente de Mr', bool(subgrade.get('mr_source'))),
+        ('Clima documentado', bool(climate.get('source')) and bool(climate.get('period'))),
+        ('Materiales documentados', bool(materials.get('source'))),
+        ('Respuesta estructural', bool(mech)),
+        ('Drenaje', bool(drainage.get('side_ditches')) and bool(drainage.get('outlets'))),
+    ]
+    detail = [{'Componente': name, 'Estado': 'Completo' if ok else 'Pendiente'} for name, ok in checks]
+    score = round(100 * sum(1 for _, ok in checks if ok) / len(checks))
+    return score, detail
+
+
 def _circular_load_vertical_stress(q_mpa: float, radius_m: float, depth_m: float) -> float:
     """Esfuerzo vertical bajo el centro de un área circular uniformemente cargada.
 
@@ -1058,8 +1190,8 @@ def technical_validation(active_tomo: str, selected: Dict, exact_match: bool, es
         add("Confiabilidad", "Parámetro de confiabilidad definido", float(reliability.get("reliability_pct",0) or 0) >= 50, "Alta", f"R={float(reliability.get('reliability_pct',0) or 0):.0f}%")
         add("Respuesta ME", "Cribado mecanístico ejecutado", bool(mechanistic), "Alta", str(mechanistic.get("method", "No ejecutado")))
         if mechanistic:
-            add("Fatiga", "εt dentro del criterio configurado", float(mechanistic.get("fatigue_utilization_ratio",99) or 99) <= 1.0, "Alta", f"Utilización={float(mechanistic.get('fatigue_utilization_ratio',0) or 0):.2f}")
-            add("Ahuellamiento", "εv dentro del criterio configurado", float(mechanistic.get("rutting_utilization_ratio",99) or 99) <= 1.0, "Alta", f"Utilización={float(mechanistic.get('rutting_utilization_ratio',0) or 0):.2f}")
+            add("Fatiga", "εt dentro del criterio configurado", float(mechanistic.get("fatigue_utilization_design", mechanistic.get("fatigue_utilization_ratio",99)) or 99) <= 1.0, "Alta", f"Utilización diseño={float(mechanistic.get('fatigue_utilization_design', mechanistic.get('fatigue_utilization_ratio',0)) or 0):.2f}")
+            add("Ahuellamiento", "εv dentro del criterio configurado", float(mechanistic.get("rutting_utilization_design", mechanistic.get("rutting_utilization_ratio",99)) or 99) <= 1.0, "Alta", f"Utilización diseño={float(mechanistic.get('rutting_utilization_design', mechanistic.get('rutting_utilization_ratio',0)) or 0):.2f}")
     if active_tomo == "Tomo II":
         add("Alcance Tomo II", "ESAL ≤ 1,5 millones", esal <= 1_500_000, "Alta", f"{esal:,.0f} ESAL")
         add("Alcance Tomo II", "CBR ≥ 3%", cbr >= 3.0, "Alta", f"CBR {cbr:.2f}%")
@@ -1078,6 +1210,11 @@ def make_report(payload: Dict) -> str:
     materials = payload.get("materials", {})
     reliability = payload.get("reliability", {})
     mechanistic = payload.get("mechanistic_screening", {})
+    transfer_model = payload.get("transfer_model", {})
+    homogeneous_segments = payload.get("homogeneous_segments", [])
+    rehabilitation = payload.get("rehabilitation", {})
+    optimization_candidates = payload.get("optimization_candidates", [])
+    quality_score, quality_detail = design_data_quality_score(payload)
     costs = payload.get("costs", {})
     active_tomo = payload.get("active_tomo", "Tomo II")
     design_category = int(traffic.get("design_category", tomo1_design_category(float(traffic.get("esal", 0.0)))))
@@ -1118,7 +1255,8 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 </style>
 </head>
 <body>
-<h1>Memoria preliminar de diseño de pavimento</h1>
+<h1>Memoria técnica de diseño de pavimento — expediente de revisión</h1>
+<div class='note'><b>Estado del expediente:</b> calidad documental {quality_score}% · Tomo activo: {active_tomo}. Los resultados configurables o de cribado deben validarse antes de una emisión definitiva.</div>
 <p><b>Proyecto:</b> {project['name']}<br>
 <b>Ubicación:</b> {project['location']}<br>
 <b>CRTM05 (EPSG:5367):</b> E {project.get('crtm05_easting_m', 0):,.3f} m · N {project.get('crtm05_northing_m', 0):,.3f} m<br>
@@ -1182,14 +1320,37 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 </table>
 <p class='note'>Cribado preliminar: no sustituye un solver elástico multicapa ni funciones de transferencia calibradas GDP-2024.</p>
 
-<h2>6. Estimación económica</h2>
+<h2>6. Transferencia, clima y confiabilidad</h2>
+<table>
+<tr><th>Estado de calibración</th><td>{transfer_model.get('calibration_status','No activado')}</td></tr>
+<tr><th>Daño fatiga de diseño</th><td>{transfer_model.get('fatigue_damage_design',0):.3f}</td></tr>
+<tr><th>Daño ahuellamiento de diseño</th><td>{transfer_model.get('rutting_damage_design',0):.3f}</td></tr>
+<tr><th>Multiplicador de confiabilidad</th><td>{mechanistic.get('reliability_multiplier',1):.3f}</td></tr>
+</table>
+
+<h2>7. Tramos homogéneos y rehabilitación</h2>
+<p><b>Tramos documentados:</b> {len(homogeneous_segments)} · <b>Modo rehabilitación:</b> {'Sí' if rehabilitation.get('enabled') else 'No'}.</p>
+<p><b>PCI existente:</b> {rehabilitation.get('pci','No aplica')} · <b>IRI:</b> {rehabilitation.get('iri_m_km','No aplica')} · <b>FWD D0:</b> {rehabilitation.get('fwd_d0_um','No aplica')}.</p>
+
+<h2>8. Diseño iterativo y comparación</h2>
+<p><b>Candidatos generados:</b> {len(optimization_candidates)}. La jerarquía Tomo I prioriza cumplimiento técnico y utilización a confiabilidad antes del costo.</p>
+
+<h2>9. Estimación económica</h2>
 <table>
 <tr><th>Área</th><td>{costs.get('area', 0):,.2f} m²</td></tr>
 <tr><th>Costo estimado</th><td>{money(costs.get('total', 0))}</td></tr>
 <tr><th>Costo por m²</th><td>{money(costs.get('per_m2', 0))}</td></tr>
 </table>
 
-<div class='note'><b>Advertencia técnica:</b> Esta herramienta es un apoyo preliminar. La selección final debe verificarse con las tablas completas del GDP, estudios de campo, drenaje, materiales, control de calidad y criterio profesional responsable.</div>
+<h2>10. Limitaciones y controles de emisión</h2>
+<ul>
+<li>El cribado mecanístico actual no sustituye un solver elástico multicapa validado.</li>
+<li>Las funciones de transferencia son configurables y permanecen pendientes de calibración específica mientras así se indique.</li>
+<li>La segmentación homogénea requiere confirmación con investigación de campo y criterio geotécnico.</li>
+<li>En rehabilitación, el retrocálculo FWD/capacidad residual permanece pendiente de un módulo validado.</li>
+<li>La selección final debe documentar fuentes, ensayos, drenaje, materiales, control de calidad y revisión profesional.</li>
+</ul>
+<div class='note'><b>Advertencia técnica:</b> Esta memoria es un expediente de revisión. No debe interpretarse como conformidad final automática del GDP-2024 mientras existan bloques identificados como configurables, preliminares o pendientes de calibración.</div>
 </body></html>"""
 
 
@@ -1262,6 +1423,11 @@ def build_excel_workbook(payload: dict, vehicles_df: pd.DataFrame, alternatives_
         pd.DataFrame([payload.get("materials", {})]).to_excel(writer, sheet_name="Materiales", index=False)
         pd.DataFrame([payload.get("reliability", {})]).to_excel(writer, sheet_name="Confiabilidad", index=False)
         pd.DataFrame([payload.get("mechanistic_screening", {})]).to_excel(writer, sheet_name="Respuesta_ME", index=False)
+        pd.DataFrame([payload.get("transfer_model", {})]).to_excel(writer, sheet_name="Transferencia", index=False)
+        pd.DataFrame(payload.get("homogeneous_segments", [])).to_excel(writer, sheet_name="Tramos", index=False)
+        pd.DataFrame([payload.get("rehabilitation", {})]).to_excel(writer, sheet_name="Rehabilitacion", index=False)
+        opt_export = payload.get("optimization_candidates", [])
+        pd.DataFrame(opt_export).to_excel(writer, sheet_name="Optimizacion", index=False)
         climate_payload = dict(payload.get("climate", {}))
         monthly_rows = climate_payload.pop("monthly_table", [])
         pd.DataFrame([climate_payload]).to_excel(writer, sheet_name="Clima", index=False)
@@ -1310,7 +1476,11 @@ def build_pdf_report(payload: dict) -> bytes:
         ["Confiabilidad", f"{reliability.get('reliability_pct',0):.1f}%"],
         ["Cribado εt bajo carpeta", f"{mechanistic.get('asphalt_tensile_microstrain_screening',0):.0f} µε"],
         ["Cribado εv sobre subrasante", f"{mechanistic.get('subgrade_vertical_microstrain_screening',0):.0f} µε"],
-        ["Utilización fatiga / ahuellamiento", f"{mechanistic.get('fatigue_utilization_ratio',0):.2f} / {mechanistic.get('rutting_utilization_ratio',0):.2f}"],
+        ["Utilización fatiga / ahuellamiento", f"{mechanistic.get('fatigue_utilization_design', mechanistic.get('fatigue_utilization_ratio',0)):.2f} / {mechanistic.get('rutting_utilization_design', mechanistic.get('rutting_utilization_ratio',0)):.2f}"],
+        ["Transferencia - estado", str(payload.get('transfer_model',{}).get('calibration_status','No activado'))],
+        ["Tramos homogéneos", str(len(payload.get('homogeneous_segments',[])))],
+        ["Rehabilitación", "Sí" if payload.get('rehabilitation',{}).get('enabled') else "No"],
+        ["Candidatos de optimización", str(len(payload.get('optimization_candidates',[])))],
         ["Clima - modo", str(climate.get("input_mode", ""))],
         ["Clima - fuente", str(climate.get("source", ""))],
         ["Clima - periodo", str(climate.get("period", ""))],
@@ -1597,6 +1767,34 @@ with p1:
     functional_class = g8.selectbox("Condición funcional", ["Nueva construcción", "Reconstrucción", "Rehabilitación", "Evaluación preliminar"], key="project_functional_condition")
     project_width_m = float(lane_width_m) * int(number_lanes) + 2.0 * float(shoulder_width_m)
     st.caption(f"Ancho geométrico de referencia calculado: {project_width_m:.2f} m. Estos datos se usan como trazabilidad y como valores iniciales en costos/exportación.")
+
+    if functional_class == "Rehabilitación":
+        st.markdown("### Diagnóstico del pavimento existente — rehabilitación")
+        st.warning("Este bloque documenta condición y auscultación. No calcula capacidad residual definitiva hasta incorporar/validar el procedimiento de retrocálculo correspondiente.")
+        rh1, rh2, rh3, rh4 = st.columns(4)
+        existing_age = rh1.number_input("Edad del pavimento existente (años)", min_value=0.0, max_value=100.0, value=10.0, step=1.0, key="rehab_age")
+        existing_pci = rh2.number_input("PCI observado", min_value=0.0, max_value=100.0, value=65.0, step=1.0, key="rehab_pci")
+        existing_iri = rh3.number_input("IRI observado (m/km)", min_value=0.0, max_value=20.0, value=3.0, step=0.1, key="rehab_iri")
+        existing_rut = rh4.number_input("Ahuellamiento observado (mm)", min_value=0.0, max_value=100.0, value=10.0, step=1.0, key="rehab_rut")
+        rh5, rh6, rh7, rh8 = st.columns(4)
+        existing_ac = rh5.number_input("Carpeta existente (cm)", min_value=0.0, max_value=100.0, value=8.0, step=1.0, key="rehab_ac")
+        existing_base = rh6.number_input("Base existente (cm)", min_value=0.0, max_value=150.0, value=20.0, step=1.0, key="rehab_base")
+        fwd_d0 = rh7.number_input("FWD D0 (µm, 0 = no disponible)", min_value=0.0, max_value=5000.0, value=0.0, step=10.0, key="rehab_fwd_d0")
+        fwd_d600 = rh8.number_input("FWD D600 (µm, 0 = no disponible)", min_value=0.0, max_value=5000.0, value=0.0, step=10.0, key="rehab_fwd_d600")
+        rehab_notes = st.text_area("Patologías, reparaciones previas y observaciones", value="", height=80, key="rehab_notes")
+        st.session_state.rehabilitation = {
+            'enabled': True, 'age_years': existing_age, 'pci': existing_pci, 'iri_m_km': existing_iri,
+            'rutting_mm': existing_rut, 'existing_asphalt_cm': existing_ac, 'existing_base_cm': existing_base,
+            'fwd_d0_um': fwd_d0, 'fwd_d600_um': fwd_d600, 'notes': rehab_notes,
+            'backcalculation_status': 'Pendiente de módulo específico' if fwd_d0 > 0 else 'Sin datos FWD',
+        }
+        if existing_pci < 55:
+            st.error("PCI bajo: la alternativa de rehabilitación debe considerar reparación estructural/rehabilitación mayor antes de aceptar un simple refuerzo.")
+        elif existing_pci < 70:
+            st.warning("PCI intermedio: revise fallas estructurales, drenaje y deflexiones antes de definir el tratamiento.")
+    else:
+        st.session_state.rehabilitation = {'enabled': False}
+
     st.session_state.project_geometry = {
         "length_m": float(project_length_m), "lane_width_m": float(lane_width_m),
         "number_lanes": int(number_lanes), "traffic_directions": traffic_directions,
@@ -1844,6 +2042,31 @@ with p3:
     if measured_mr <= 0 and mr_source != "Estimado a partir del CBR":
         st.warning("Se indicó una fuente documentada de Mr, pero no se ingresó el valor. Se mantiene temporalmente la estimación por CBR.")
 
+    st.markdown("#### Segmentación preliminar en tramos homogéneos")
+    st.caption("Registre cambios de subrasante, tránsito relativo o zona climática. El agrupamiento es documental y de cribado; la delimitación final debe responder a la investigación de campo.")
+    default_segments = pd.DataFrame([{
+        'Tramo': 'TH-01', 'Inicio_m': 0.0, 'Fin_m': float(project_length_m), 'CBR_%': float(cbr_design),
+        'Mr_MPa': float(mr), 'Factor_tránsito': 1.0, 'Zona_climática': str(st.session_state.get('climate_zone_hint','General'))
+    }])
+    seg_df = st.data_editor(st.session_state.get('homogeneous_segments_input', default_segments), num_rows='dynamic', use_container_width=True, hide_index=True, key='homogeneous_segments_editor')
+    st.session_state.homogeneous_segments_input = seg_df.copy()
+    seg_work = seg_df.copy()
+    for col in ['Inicio_m','Fin_m','CBR_%','Mr_MPa','Factor_tránsito']:
+        if col in seg_work.columns:
+            seg_work[col] = pd.to_numeric(seg_work[col], errors='coerce').fillna(0.0)
+    if not seg_work.empty:
+        seg_work['Longitud_m'] = (seg_work['Fin_m'] - seg_work['Inicio_m']).clip(lower=0.0)
+        seg_work['ESAL_tramo'] = float(esal) * seg_work['Factor_tránsito'].clip(lower=0.0)
+        seg_work['Categoría_TomoI'] = seg_work['ESAL_tramo'].apply(lambda x: f"Categoría {tomo1_design_category(float(x))}")
+        seg_work['Clase_subrasante'] = seg_work['CBR_%'].apply(lambda x: subgrade_class(float(x)) if float(x) > 0 else 'Sin definir')
+        seg_work['Grupo_preliminar'] = seg_work.apply(lambda r: f"{r['Categoría_TomoI']} / {r['Clase_subrasante']} / {r.get('Zona_climática','')}", axis=1)
+        st.dataframe(seg_work, use_container_width=True, hide_index=True)
+        if (seg_work['Fin_m'] < seg_work['Inicio_m']).any():
+            st.error("Hay tramos con estación final menor que la inicial.")
+        if seg_work['Longitud_m'].sum() < float(project_length_m) * 0.95:
+            st.warning("La suma de longitudes de tramos no cubre toda la longitud del proyecto. Revise estaciones.")
+    st.session_state.homogeneous_segments = seg_work.to_dict(orient='records')
+
     render_gdp_scope_alerts(st.session_state.active_tomo, tpd_total, heavy_pct, cbr_design, esal, int(years))
 
     chart_df = cbr_series.copy()
@@ -1928,6 +2151,25 @@ with pclima:
 
     st.markdown("#### Trazabilidad climática")
     st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
+
+    if st.session_state.active_tomo == "Tomo I":
+        st.markdown("#### Vínculo clima – módulo dinámico E*")
+        st.caption("Ingrese E* representativo por mes a partir de curva maestra/ensayos o procedimiento documentado. La aplicación no inventa una relación temperatura–módulo.")
+        temps_for_e = monthly_values if len(monthly_values) == 12 else [float(air_temp_c)] * 12
+        e_ref_state = float(st.session_state.get('design_materials', {}).get('asphalt_dynamic_modulus_mpa', 3500.0) or 3500.0)
+        default_e_monthly = pd.DataFrame({'Mes': MONTHS_ES, 'Temperatura aire/pavimento de referencia (°C)': temps_for_e, 'E* mensual (MPa)': [e_ref_state] * 12})
+        e_monthly = st.data_editor(st.session_state.get('monthly_dynamic_modulus_input', default_e_monthly), num_rows='fixed', use_container_width=True, hide_index=True, key='monthly_dynamic_modulus_editor')
+        st.session_state.monthly_dynamic_modulus_input = e_monthly.copy()
+        climate_material_factor = monthly_material_climate_factor(e_monthly, e_ref_state)
+        st.session_state.climate_material = {
+            'monthly_modulus': e_monthly.to_dict(orient='records'), 'reference_modulus_mpa': e_ref_state,
+            'relative_climate_factor': climate_material_factor, 'method': 'E* mensual ingresado/documentado por usuario'
+        }
+        cm1, cm2 = st.columns(2)
+        cm1.metric("E* de referencia", f"{e_ref_state:,.0f} MPa")
+        cm2.metric("Factor climático relativo", f"{climate_material_factor:.3f}")
+        if not master_curve_confirmed:
+            st.warning("El E* mensual se acepta como entrada documental, pero la curva maestra todavía no está confirmada.")
 
     st.markdown("#### Alertas de cumplimiento y revisión")
     climate_checks = climate_alerts(st.session_state.active_tomo, pavement_type, air_temp_c, pavement_temp_c, latitude, depth_mm, analysis_category, temp_data_confirmed, master_curve_confirmed, station_selected)
@@ -2297,6 +2539,43 @@ with pflex:
         })
         st.session_state.mechanistic_screening = mech_response
 
+        st.markdown("#### Confiabilidad aplicada al resultado")
+        uq1, uq2 = st.columns(2)
+        response_log_sigma = uq1.number_input("Incertidumbre lognormal de respuesta σln", min_value=0.0, max_value=1.0, value=0.15, step=0.01, key="response_log_sigma", help="Parámetro configurable; no es un valor GDP universal.")
+        rel_multiplier = reliability_multiplier(reliability_pct, response_log_sigma)
+        fatigue_design_util = fatigue_util * rel_multiplier
+        rut_design_util = rut_util * rel_multiplier
+        uq2.metric("Multiplicador por confiabilidad", f"{rel_multiplier:.3f}", f"R = {reliability_pct:.1f}%")
+        mech_response['reliability_multiplier'] = rel_multiplier
+        mech_response['fatigue_utilization_design'] = fatigue_design_util
+        mech_response['rutting_utilization_design'] = rut_design_util
+        mech_response['response_log_sigma'] = response_log_sigma
+        st.session_state.mechanistic_screening = mech_response
+        rr1, rr2 = st.columns(2)
+        rr1.metric("Utilización fatiga a confiabilidad", f"{fatigue_design_util:.2f}", "Cumple" if fatigue_design_util <= 1 else "Revisar")
+        rr2.metric("Utilización ahuellamiento a confiabilidad", f"{rut_design_util:.2f}", "Cumple" if rut_design_util <= 1 else "Revisar")
+
+        st.markdown("#### Diseño iterativo automático — candidatos de cribado")
+        st.caption("Explora incrementos discretos de carpeta/base/subbase y descarta primero candidatos que no cumplen el cribado a confiabilidad. No reemplaza la optimización del solver multicapa definitivo.")
+        op1, op2, op3, op4 = st.columns(4)
+        opt_max_inc = op1.number_input("Incremento máximo a explorar por capa (cm)", min_value=0, max_value=30, value=8, step=2, key="opt_max_inc")
+        opt_surface_price = op2.number_input("Precio carpeta para optimización (₡/m³)", min_value=0.0, value=95000.0, step=5000.0, key="opt_surface_price")
+        opt_base_price = op3.number_input("Precio base para optimización (₡/m³)", min_value=0.0, value=28000.0, step=1000.0, key="opt_base_price")
+        opt_subbase_price = op4.number_input("Precio subbase para optimización (₡/m³)", min_value=0.0, value=22000.0, step=1000.0, key="opt_subbase_price")
+        opt_area = float(project_length_m) * float(project_width_m)
+        if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
+            opt_df = optimize_screening_structure(
+                selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
+                allowable_eps_t, allowable_eps_v, reliability_pct, response_log_sigma, opt_area,
+                {'surface': opt_surface_price, 'base': opt_base_price, 'subbase': opt_subbase_price}, int(opt_max_inc)
+            )
+            st.session_state.optimization_candidates = opt_df
+        opt_show = st.session_state.get('optimization_candidates', pd.DataFrame())
+        if isinstance(opt_show, pd.DataFrame) and not opt_show.empty:
+            compliant_count = int((opt_show['Cumple_cribado'] == 'Sí').sum())
+            st.success(f"Se generaron {len(opt_show)} candidatos; {compliant_count} cumplen el cribado a confiabilidad configurado.")
+            st.dataframe(opt_show.head(25), use_container_width=True, hide_index=True)
+
         mr1, mr2, mr3, mr4 = st.columns(4)
         mr1.metric("Radio de contacto", f"{mech_response['contact_radius_m']*1000:.0f} mm")
         mr2.metric("εt bajo carpeta — cribado", f"{mech_response['asphalt_tensile_microstrain_screening']:.0f} µε", f"Utilización {fatigue_util:.2f}")
@@ -2347,6 +2626,29 @@ with pperf:
             st.info("Estas utilizaciones sirven para priorizar revisión estructural. Las curvas de deterioro inferiores continúan siendo preliminares y todavía no constituyen funciones de transferencia GDP calibradas.")
         else:
             st.warning("Ejecute primero la respuesta mecanística de cribado en **6. Diseño flexible** para vincular deformaciones críticas con este módulo.")
+        st.markdown("#### Funciones de transferencia configurables")
+        transfer_enabled = st.checkbox("Activar modelo configurable de daño (requiere calibración del proyecto)", value=False, key="transfer_enabled")
+        tf1, tf2, tf3, tf4 = st.columns(4)
+        transfer_reference_esal = tf1.number_input("ESAL de referencia del modelo", min_value=1.0, value=1_000_000.0, step=100_000.0, key="transfer_ref_esal")
+        fatigue_exponent = tf2.number_input("Exponente de transferencia fatiga", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_fatigue_exp")
+        rutting_exponent = tf3.number_input("Exponente de transferencia ahuellamiento", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_rut_exp")
+        transfer_sigma = tf4.number_input("σln del modelo de transferencia", min_value=0.0, max_value=1.0, value=float(st.session_state.get('mechanistic_screening',{}).get('response_log_sigma',0.15)), step=0.01, key="transfer_sigma")
+        climate_factor_tf = float(st.session_state.get('climate_material', {}).get('relative_climate_factor', 1.0) or 1.0)
+        transfer_result = {}
+        if transfer_enabled and mech_state:
+            transfer_result = configurable_transfer_damage(
+                mech_state, esal, climate_factor_tf, float(st.session_state.get('design_reliability',{}).get('reliability_pct',75.0)),
+                transfer_sigma, transfer_reference_esal, fatigue_exponent, rutting_exponent
+            )
+            st.session_state.transfer_model = transfer_result
+            td1, td2, td3 = st.columns(3)
+            td1.metric("Daño fatiga de diseño", f"{transfer_result['fatigue_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['fatigue_damage_design'] <= 1 else ">1 revisar")
+            td2.metric("Daño ahuellamiento de diseño", f"{transfer_result['rutting_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['rutting_damage_design'] <= 1 else ">1 revisar")
+            td3.metric("Factor climático E*", f"{climate_factor_tf:.3f}")
+            st.warning("Estos índices son configurables y **no se identifican como funciones de transferencia oficiales GDP-2024** hasta introducir y validar una calibración específica.")
+        else:
+            st.session_state.transfer_model = {'enabled': False, 'calibration_status': 'Desactivado / pendiente de calibración'}
+
         pc1,pc2,pc3,pc4 = st.columns(4)
         with pc1:
             perf_years = st.number_input("Horizonte de monitoreo (años)", 1, 40, int(years), key="perf_years")
@@ -2419,32 +2721,41 @@ with pcompare:
     st.subheader("Comparación técnica y económica de alternativas")
     if active_tomo == "Tomo II":
         candidates = st.session_state.get("tomo2_options", pd.DataFrame()).copy()
-        st.caption("Comparación limitada a las alternativas oficiales asignadas por la celda normativa vigente para el proyecto.")
+        st.caption("Tomo II: comparación limitada a alternativas oficiales de la celda normativa vigente.")
+        if candidates.empty:
+            st.info("No hay alternativas oficiales compatibles disponibles para comparar.")
+            st.session_state.alternatives_compare = pd.DataFrame()
+        else:
+            cp1,cp2,cp3=st.columns(3)
+            surf_price=cp1.number_input("Precio referencial superficie (₡/m³)",0.0,value=95000.0,step=5000.0,key='cmp_surf_t2')
+            base_price=cp2.number_input("Precio referencial base (₡/m³)",0.0,value=28000.0,step=1000.0,key='cmp_base_t2')
+            sub_price=cp3.number_input("Precio referencial subbase (₡/m³)",0.0,value=22000.0,step=1000.0,key='cmp_sub_t2')
+            cmp_area=st.number_input("Área para comparación (m²)",1.0,value=float(project_length_m*project_width_m),step=50.0,key='cmp_area_t2')
+            candidates['Espesor_total_cm']=candidates[['Carpeta_cm','Base_cm','Subbase_cm']].sum(axis=1)
+            candidates['Costo_inicial']=cmp_area*(candidates['Carpeta_cm']/100*surf_price+candidates['Base_cm']/100*base_price+candidates['Subbase_cm']/100*sub_price)
+            candidates['Estado_técnico']='Oficial GDP-2024'
+            show=candidates.sort_values(['Costo_inicial','Espesor_total_cm']).copy()
+            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.session_state.alternatives_compare=show
     else:
-        candidates = st.session_state.catalog.copy()
-        st.caption("Comparación preliminar de referencia para Tomo I.")
-
-    if candidates.empty:
-        st.info("No hay alternativas compatibles disponibles para comparar.")
-        st.session_state.alternatives_compare = pd.DataFrame()
-    else:
-        cp1,cp2,cp3=st.columns(3)
-        surf_price=cp1.number_input("Precio referencial superficie (₡/m³)",0.0,value=95000.0,step=5000.0,key='cmp_surf')
-        base_price=cp2.number_input("Precio referencial base (₡/m³)",0.0,value=28000.0,step=1000.0,key='cmp_base')
-        sub_price=cp3.number_input("Precio referencial subbase (₡/m³)",0.0,value=22000.0,step=1000.0,key='cmp_sub')
-        cmp_area=st.number_input("Área para comparación (m²)",1.0,value=900.0,step=50.0,key='cmp_area')
-        candidates['Espesor_total_cm']=candidates[['Carpeta_cm','Base_cm','Subbase_cm']].sum(axis=1)
-        candidates['Costo_inicial']=cmp_area*(candidates['Carpeta_cm']/100*surf_price+candidates['Base_cm']/100*base_price+candidates['Subbase_cm']/100*sub_price)
-        candidates['Coincidencia']='Oficial GDP-2024' if active_tomo == "Tomo II" else 'Referencia'
-        cmin=max(float(candidates['Costo_inicial'].min()),1.0); cmax=max(float(candidates['Costo_inicial'].max()),cmin)
-        emin=max(float(candidates['Espesor_total_cm'].min()),1.0); emax=max(float(candidates['Espesor_total_cm'].max()),emin)
-        candidates['Índice técnico-económico']=100-(60*(candidates['Costo_inicial']-cmin)/(cmax-cmin+1e-9)+40*(candidates['Espesor_total_cm']-emin)/(emax-emin+1e-9))
-        base_cols=['Código','Superficie','Espesor_total_cm','Costo_inicial','Coincidencia','Índice técnico-económico']
-        trace_cols=[c for c in ['Tabla_asignacion','Criterio_GDP'] if c in candidates.columns]
-        show=candidates[base_cols+trace_cols].sort_values('Índice técnico-económico',ascending=False)
-        st.dataframe(show.style.format({'Costo_inicial':'₡{:,.0f}','Espesor_total_cm':'{:.0f}'}),use_container_width=True,hide_index=True)
-        st.bar_chart(show.set_index('Código')['Costo_inicial'])
-        st.session_state.alternatives_compare=show
+        candidates = st.session_state.get('optimization_candidates', pd.DataFrame()).copy()
+        st.caption("Tomo I: jerarquía obligatoria **cumplimiento técnico → utilización a confiabilidad → costo → espesor**. Los candidatos provienen del cribado iterativo, no de un catálogo normativo.")
+        if candidates.empty:
+            st.info("Genere candidatos en **6. Diseño flexible** para ejecutar la comparación técnico-económica Tomo I.")
+            st.session_state.alternatives_compare = pd.DataFrame()
+        else:
+            candidates['Cumple_num'] = candidates['Cumple_cribado'].eq('Sí').astype(int)
+            show = candidates.sort_values(['Cumple_num','Máxima_utilización','Costo_inicial','Espesor_total_cm'], ascending=[False,True,True,True]).copy()
+            show['Prioridad'] = range(1, len(show)+1)
+            cols = ['Prioridad','Código','Cumple_cribado','Utilización_fatiga_diseño','Utilización_ahuellamiento_diseño','Máxima_utilización','Carpeta_cm','Base_cm','Subbase_cm','Espesor_total_cm','Costo_inicial']
+            st.dataframe(show[cols].head(50), use_container_width=True, hide_index=True)
+            compliant = show[show['Cumple_cribado']=='Sí']
+            if not compliant.empty:
+                best = compliant.iloc[0]
+                st.success(f"Candidato prioritario de cribado: **{best['Código']}** · utilización máx. {best['Máxima_utilización']:.2f} · costo {money(best['Costo_inicial'])}.")
+            else:
+                st.error("Ningún candidato cumple el cribado a confiabilidad. Debe ampliar rangos de espesores o revisar materiales/carga antes de comparar costos.")
+            st.session_state.alternatives_compare = show
 
 with p5:
     st.subheader("Costos de construcción y cantidades de obra")
@@ -2634,6 +2945,11 @@ with p6:
         "materials": st.session_state.get("design_materials", {}) if active_tomo == "Tomo I" else {},
         "reliability": st.session_state.get("design_reliability", {}) if active_tomo == "Tomo I" else {},
         "mechanistic_screening": st.session_state.get("mechanistic_screening", {}) if active_tomo == "Tomo I" else {},
+        "transfer_model": st.session_state.get("transfer_model", {}) if active_tomo == "Tomo I" else {},
+        "climate_material": st.session_state.get("climate_material", {}) if active_tomo == "Tomo I" else {},
+        "homogeneous_segments": st.session_state.get("homogeneous_segments", []),
+        "rehabilitation": st.session_state.get("rehabilitation", {}),
+        "optimization_candidates": st.session_state.get("optimization_candidates", pd.DataFrame()).to_dict(orient="records") if isinstance(st.session_state.get("optimization_candidates", pd.DataFrame()), pd.DataFrame) else [],
         "climate": {
             "input_mode": climate_input_mode,
             "source": climate_source,
@@ -2659,6 +2975,16 @@ with p6:
         "lifecycle_npv": st.session_state.get("lifecycle_npv", 0.0),
         "costs": {"area": area_m2, "total": total_cost, "per_m2": per_m2},
     }
+
+    quality_score, quality_detail = design_data_quality_score(payload)
+    st.markdown("#### Estado profesional del expediente")
+    qi1, qi2, qi3 = st.columns(3)
+    qi1.metric("Calidad documental", f"{quality_score}%")
+    qi2.metric("Tramos homogéneos", f"{len(payload.get('homogeneous_segments', []))}")
+    qi3.metric("Candidatos optimizados", f"{len(payload.get('optimization_candidates', []))}")
+    st.dataframe(pd.DataFrame(quality_detail), use_container_width=True, hide_index=True)
+    if payload.get('transfer_model', {}).get('calibration_status') == 'Configurable / no normativa':
+        st.warning("La función de transferencia está activa pero continúa marcada como configurable/no normativa. No emitir como diseño definitivo sin calibración validada.")
 
     report_html = make_report(payload)
     st.download_button(
