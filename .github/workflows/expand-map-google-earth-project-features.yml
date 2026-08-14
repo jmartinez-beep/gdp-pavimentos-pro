@@ -1,0 +1,55 @@
+name: Ampliar Mapa Google Earth
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/expand_map_google_earth_project_features.py'
+      - '.github/workflows/expand-map-google-earth-project-features.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración
+        run: python tools/expand_map_google_earth_project_features.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar mapa ampliado
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+              '# MAP_GOOGLE_EARTH_PROJECT_FEATURES',
+              'def project_features_kml',
+              'Inventario geográfico del proyecto',
+              'Sondeo P1',
+              'Sondeo P2',
+              'Eje y tramos homogéneos',
+              'Descargar KML completo del proyecto',
+              "'points':resolved_points",
+              "'lines':project_lines",
+          ]
+          for x in required:
+              assert x in t, x
+          print('Mapa multipunto y KML completo verificados.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Ampliar mapa Google Earth con puntos y tramos"
+            git push
+          fi
