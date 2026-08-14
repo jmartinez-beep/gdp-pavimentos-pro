@@ -245,6 +245,13 @@ def money(value: float) -> str:
 
 
 # CLIMATE_GRANULAR_MASTER_CURVE_PHASE
+# VERIFIED_CR2020_MATERIAL_THRESHOLDS
+CR2020_BASE_CBR_MIN_PCT = 80.0
+CR2020_SUBBASE_CBR_MIN_PCT = 30.0
+CR2020_GRANULAR_QUALITY_REFERENCE = (
+    'CR-2020: Sección 301 Subbases y bases granulares + Subsección 703.05 Agregado para capas de subbase y base'
+)
+
 def granular_resilient_modulus_mpa(k1: float, k2: float, k3: float, theta_kpa: float, tau_oct_kpa: float, pa_kpa: float = 101.325) -> float:
     """Modelo constitutivo configurable para materiales granulares.
 
@@ -2253,8 +2260,8 @@ with pclima:
     st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
 
     if st.session_state.active_tomo == "Tomo I":
-        st.markdown("#### Clasificación climática A / B — criterio documentado")
-        st.warning("La clasificación A/B queda operativa como **criterio configurable**. Antes de usarla como clasificación normativa, documente la tabla/umbral GDP aplicable al proyecto.")
+        st.markdown("#### Clasificación climática A / B — criterio de proyecto, pendiente de tabla normativa exacta")
+        st.warning("No se ha fijado un umbral A/B como requisito GDP universal. La clasificación permanece como **criterio de proyecto** hasta vincular la tabla/sección oficial exacta; no se usa para declarar conformidad normativa.")
         cl1, cl2, cl3 = st.columns(3)
         climate_ab_threshold = cl1.number_input("Umbral térmico A/B (°C)", min_value=-10.0, max_value=80.0, value=32.0, step=0.5, key='climate_ab_threshold')
         climate_ab_orientation = cl2.selectbox("Regla A/B", ['A ≤ umbral; B > umbral', 'B ≤ umbral; A > umbral'], key='climate_ab_orientation')
@@ -2602,8 +2609,8 @@ with p4:
         m3.metric("Subbase", f"{subbase_cm:.1f} cm")
         m4.metric("Sección modelada", f"{total_thickness:.1f} cm")
 
-        st.markdown("##### Verificación de espesor de carpeta asfáltica")
-        st.caption("Rango configurable mientras se documenta la tabla GDP/CR-2020 aplicable. El sistema no declara estos valores como límites normativos universales.")
+        st.markdown("##### Verificación de espesor de carpeta asfáltica — diseño/fórmula de trabajo")
+        st.caption("CR-2020 controla el espesor contra el diseño, fórmula de trabajo y tamaño máximo nominal aplicable; no se impone aquí un único rango universal. Los límites siguientes son del proyecto y deben quedar documentados.")
         th1, th2, th3 = st.columns(3)
         asphalt_min_cm = th1.number_input("Espesor mínimo permitido (cm)", min_value=0.0, max_value=40.0, value=5.0, step=0.5, key='asphalt_min_cm_criterion')
         asphalt_max_cm = th2.number_input("Espesor máximo permitido (cm)", min_value=0.0, max_value=80.0, value=20.0, step=0.5, key='asphalt_max_cm_criterion')
@@ -2732,11 +2739,14 @@ with pflex:
         st.info("Los espesores teóricos por SN residual deben ajustarse a mínimos constructivos, rangos GDP/CR-2020 aplicables y al análisis mecanístico-empírico; no son por sí solos una sección final.")
 
         st.markdown("##### Control de calidad CBR de materiales granulares")
+        st.caption("Criterios incorporados como control fijo de calidad: base granular CBR ≥ 80% y subbase granular CBR ≥ 30%. Referencia de aplicación: CR-2020 Sección 301 y Subsección 703.05. Verifique además graduación, plasticidad y demás requisitos de la especificación vigente.")
         cb1, cb2, cb3, cb4 = st.columns(4)
         base_cbr = cb1.number_input("CBR material de base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_material_cbr")
-        base_cbr_min = cb2.number_input("CBR mínimo exigido a base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_cbr_min_criterion", help="Criterio configurable: confirme el valor con la especificación vigente aplicable al material/proyecto.")
+        cb2.metric("CBR mínimo base — CR-2020", f"{CR2020_BASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
         subbase_cbr = cb3.number_input("CBR material de subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_material_cbr")
-        subbase_cbr_min = cb4.number_input("CBR mínimo exigido a subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_cbr_min_criterion", help="Criterio configurable: confirme el valor con la especificación vigente aplicable al material/proyecto.")
+        cb4.metric("CBR mínimo subbase — CR-2020", f"{CR2020_SUBBASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
+        base_cbr_min = CR2020_BASE_CBR_MIN_PCT
+        subbase_cbr_min = CR2020_SUBBASE_CBR_MIN_PCT
         base_cbr_ok = base_cbr >= base_cbr_min; subbase_cbr_ok = subbase_cbr >= subbase_cbr_min
         st.session_state.layer_quality_controls = {'base_cbr':base_cbr,'base_cbr_min':base_cbr_min,'base_cbr_ok':base_cbr_ok,
             'subbase_cbr':subbase_cbr,'subbase_cbr_min':subbase_cbr_min,'subbase_cbr_ok':subbase_cbr_ok,
