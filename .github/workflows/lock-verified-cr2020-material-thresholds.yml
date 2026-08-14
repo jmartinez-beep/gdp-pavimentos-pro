@@ -1,0 +1,54 @@
+name: Integrar umbrales CR-2020 verificados
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/lock_verified_cr2020_material_thresholds.py'
+      - '.github/workflows/lock-verified-cr2020-material-thresholds.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar umbrales verificados
+        run: python tools/lock_verified_cr2020_material_thresholds.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar integración normativa
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+            'CR2020_BASE_CBR_MIN_PCT = 80.0',
+            'CR2020_SUBBASE_CBR_MIN_PCT = 30.0',
+            'CBR mínimo base — CR-2020',
+            'CBR mínimo subbase — CR-2020',
+            'pendiente de tabla normativa exacta',
+            'no se impone aquí un único rango universal'
+          ]
+          for x in required:
+              assert x in t, x
+          assert 'number_input("CBR mínimo exigido a base (%)"' not in t
+          assert 'number_input("CBR mínimo exigido a subbase (%)"' not in t
+          print('Umbrales CR-2020 y separación de criterios no verificados confirmados.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Fijar CBR mínimos CR-2020 y separar criterios no verificados"
+            git push
+          fi
