@@ -46,9 +46,19 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           t=Path('app.py').read_text(encoding='utf-8')
-          for x in ['def aashto93_required_sn','SN requerido AASHTO-93','D2 teórico por SN residual','CBR material de base','Calidad_granulares','AASHTO93']:
+          required=[
+              'def aashto93_required_sn',
+              'SN requerido AASHTO-93',
+              'D2 teórico por SN residual',
+              'CBR material de base',
+              'CBR material de subbase',
+              'SN1 = a1·D1',
+              'SN2 (aporte base)',
+              'SN3 (aporte subbase)',
+          ]
+          for x in required:
               assert x in t, x
-          print('Integración AASHTO93 verificada.')
+          print('Integración inicial AASHTO93 verificada.')
           PY
       - name: Guardar cambios
         run: |
