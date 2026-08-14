@@ -955,7 +955,7 @@ def make_report(payload: Dict) -> str:
         structure_html = f"""
         <table>
           <tr><th>Código</th><td>{selected['Código']}</td></tr>
-          <tr><th>Opción</th><td>{selected['Opción']}</td></tr>
+          <tr><th>Opción</th><td>{selected.get('Opción', 'Estructura seleccionada')}</td></tr>
           <tr><th>Superficie</th><td>{selected['Superficie']}</td></tr>
           <tr><th>Carpeta</th><td>{selected['Carpeta_cm']} cm</td></tr>
           <tr><th>Base</th><td>{selected['Base_cm']} cm</td></tr>
@@ -2414,4 +2414,5 @@ with pdash:
         st.markdown("<div class='dark-note'>Los gráficos de deterioro son estimaciones preliminares y no sustituyen la verificación mecanístico-empírica detallada del Tomo I.</div>",unsafe_allow_html=True)
     else:
         st.info("Complete el módulo de Estructura para activar el Dashboard profesional.")
+
 
