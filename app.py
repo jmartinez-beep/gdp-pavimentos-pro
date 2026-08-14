@@ -247,6 +247,36 @@ def money(value: float) -> str:
     return f"₡{value:,.0f}".replace(",", " ")
 
 
+# MAP_GOOGLE_EARTH_TAB
+def _xml_escape(value) -> str:
+    return (str(value or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;"))
+
+
+def project_point_kml(project_name: str, latitude: float, longitude: float, description: str = "") -> str:
+    name = _xml_escape(project_name or "Proyecto GDP")
+    desc = _xml_escape(description)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<kml xmlns="http://www.opengis.net/kml/2.2">\n'
+        '  <Document>\n'
+        f'    <name>{name}</name>\n'
+        '    <Placemark>\n'
+        f'      <name>{name}</name>\n'
+        f'      <description>{desc}</description>\n'
+        '      <Point>\n'
+        f'        <coordinates>{float(longitude):.8f},{float(latitude):.8f},0</coordinates>\n'
+        '      </Point>\n'
+        '    </Placemark>\n'
+        '  </Document>\n'
+        '</kml>\n'
+    )
+
+
 # CLIMATE_GRANULAR_MASTER_CURVE_PHASE
 # VERIFIED_CR2020_MATERIAL_THRESHOLDS
 CR2020_BASE_CBR_MIN_PCT = 80.0
@@ -2046,9 +2076,9 @@ GDP Pavimentos Pro 2024 — versión 1.1 · Web Ready Multiusuario
 </div>
 """, unsafe_allow_html=True)
 
-pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6 = st.tabs([
+pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6, pmap = st.tabs([
     "🏠 Dashboard", "1. Proyecto", "2. Tránsito", "3. Subrasante", "4. Clima", "5. Estructura",
-    "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Control CR-2020", "14. Exportación", "15. Informe"
+    "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Control CR-2020", "14. Exportación", "15. Informe", "16. Mapa / Google Earth"
 ])
 
 with p1:
@@ -3583,6 +3613,10 @@ with p6:
         "reliability": st.session_state.get("design_reliability", {}) if active_tomo == "Tomo I" else {},
         "normative_evidence": normative_evidence_table().to_dict(orient="records"),
         "asphalt_thickness_control": st.session_state.get("asphalt_thickness_control", {}),
+        "project_map": st.session_state.get("project_map", {
+            "latitude": float(latitude), "longitude": float(longitude),
+            "crtm_easting": float(crtm_easting), "crtm_northing": float(crtm_northing),
+        }),
         "granular_quality": st.session_state.get("granular_quality", {}),
         "layer_interfaces": st.session_state.get("layer_interfaces", {}),
         "stabilized_base_model": st.session_state.get("stabilized_base_model", {}),
@@ -3684,6 +3718,69 @@ with p6:
         f"La geometría de referencia es **{project_length_m:,.0f} m × {project_width_m:.2f} m**."
     )
     st.warning("La aplicación no sustituye la memoria de cálculo firmada. En Tomo II la selección se obtiene de las tablas GDP-2024 integradas; aun así deben verificarse estudios, materiales, drenaje, condiciones particulares y criterio profesional responsable.")
+
+with pmap:
+    st.subheader("Mapa del proyecto / Google Earth")
+    st.caption("Las coordenadas se toman automáticamente de la pestaña 1. Proyecto. No es necesario volver a digitarlas.")
+
+    map_lat = float(latitude)
+    map_lon = float(longitude)
+    map_e = float(crtm_easting)
+    map_n = float(crtm_northing)
+
+    mp1, mp2, mp3, mp4 = st.columns(4)
+    mp1.metric("Este CRTM05", f"{map_e:,.3f} m")
+    mp2.metric("Norte CRTM05", f"{map_n:,.3f} m")
+    mp3.metric("Latitud WGS84", f"{map_lat:.7f}°")
+    mp4.metric("Longitud WGS84", f"{map_lon:.7f}°")
+
+    if is_plausible_costa_rica_wgs84(map_lon, map_lat):
+        map_df = pd.DataFrame({
+            "lat": [map_lat], "lon": [map_lon],
+            "Proyecto": [project_name], "Ubicación": [location],
+        })
+        st.map(map_df, latitude="lat", longitude="lon", zoom=15)
+    else:
+        st.error("Las coordenadas actuales quedan fuera del entorno geográfico esperado de Costa Rica. Revise la pestaña Proyecto antes de abrir o exportar la ubicación.")
+
+    st.markdown("#### Abrir ubicación")
+    google_maps_url = f"https://www.google.com/maps/search/?api=1&query={map_lat:.8f},{map_lon:.8f}"
+    gm1, gm2 = st.columns(2)
+    gm1.link_button("🌎 Abrir en Google Maps", google_maps_url, use_container_width=True)
+    gm2.markdown(
+        f"**Coordenadas para Google Earth:** `{map_lat:.8f}, {map_lon:.8f}`  \n"
+        "Puede pegar estas coordenadas directamente en el buscador de Google Earth."
+    )
+
+    st.markdown("#### Exportar a Google Earth (KML)")
+    kml_description = (
+        f"Proyecto: {project_name} | Ubicación: {location} | Tomo activo: {active_tomo} | "
+        f"CRTM05 E={map_e:.3f} m, N={map_n:.3f} m"
+    )
+    kml_text = project_point_kml(project_name, map_lat, map_lon, kml_description)
+    safe_project_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in str(project_name)).strip('_') or 'Proyecto_GDP'
+    st.download_button(
+        "⬇️ Descargar punto KML para Google Earth",
+        data=kml_text.encode("utf-8"),
+        file_name=f"{safe_project_name}_ubicacion.kml",
+        mime="application/vnd.google-earth.kml+xml",
+        use_container_width=True,
+    )
+
+    st.markdown("#### Ficha geográfica")
+    geographic_record = pd.DataFrame([{
+        "Proyecto": project_name, "Ubicación": location, "Tomo": active_tomo,
+        "Sistema entrada": coordinate_system,
+        "Este CRTM05 (m)": map_e, "Norte CRTM05 (m)": map_n,
+        "Latitud WGS84": map_lat, "Longitud WGS84": map_lon,
+    }])
+    st.dataframe(geographic_record, use_container_width=True, hide_index=True)
+    st.session_state.project_map = {
+        "latitude": map_lat, "longitude": map_lon, "crtm_easting": map_e, "crtm_northing": map_n,
+        "google_maps_url": google_maps_url, "kml_filename": f"{safe_project_name}_ubicacion.kml",
+    }
+    st.info("El KML contiene el punto central del proyecto. En una siguiente ampliación se pueden agregar sondeos, inicio/fin, tramos homogéneos, puentes, alcantarillas y otras obras como geometrías independientes.")
+
 
 with pdash:
     # Dashboard profesional v0.9.1: una sola vista de control, similar al tablero de referencia.
