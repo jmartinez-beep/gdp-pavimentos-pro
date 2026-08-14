@@ -1,0 +1,53 @@
+name: Integrar clima granulares curva maestra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/add_climate_granular_mastercurve_phase.py'
+      - '.github/workflows/add-climate-granular-mastercurve-phase.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar fase
+        run: python tools/add_climate_granular_mastercurve_phase.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar integración funcional
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+            'def granular_resilient_modulus_mpa',
+            'def wlf_log10_shift_factor',
+            'def master_curve_dynamic_modulus_mpa',
+            'Clasificación climática A / B',
+            'Curva maestra y ecuación de desplazamiento',
+            'Modelo constitutivo para arenas / bases / subbases granulares',
+            'Verificación de espesor de carpeta asfáltica'
+          ]
+          for x in required:
+              assert x in t, x
+          print('Fase clima/granulares/curva maestra verificada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar clima A-B granulares y curva maestra"
+            git push
+          fi
