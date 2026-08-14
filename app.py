@@ -12,6 +12,7 @@ import os
 
 from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
+from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
 from cr2020_asphalt import render_asphalt_cr2020_checklist
@@ -178,6 +179,7 @@ CATALOG_DEFAULT = pd.DataFrame(
     ],
 )
 
+# TOMO2_METHODOLOGY_HARDENING
 TRAFFIC_RANGES = [
     ("U1", 0, 20_000),
     ("U2", 20_000, 50_000),
@@ -2249,7 +2251,14 @@ with p2:
 
     a, b, c, d = st.columns(4)
     with a:
-        years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=10)
+        if st.session_state.active_tomo == "Tomo II":
+            years = st.selectbox(
+                "Periodo de diseño Tomo II (años)", [6, 8, 10, 12], index=2,
+                key="tomo2_design_period",
+                help="GDP-2024 Tomo II: selección directa de catálogo para 6, 8, 10 o 12 años, sin interpolación."
+            )
+        else:
+            years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=10, key="tomo1_design_period")
     with b:
         growth_pct = st.number_input("Crecimiento anual (%)", min_value=0.0, max_value=20.0, value=3.0, step=0.1)
     with c:
@@ -2272,7 +2281,20 @@ with p2:
     m2.metric("Vehículos pesados", f"{heavy_total:,.0f}", f"{heavy_pct:.2f}%")
     m3.metric("Ejes equivalentes diarios", f"{weighted_daily:,.2f}")
     m4.metric("Factor de crecimiento G", f"{gf:,.3f}")
-    m5.metric("EEq de diseño", f"{esal:,.0f}", tclass if st.session_state.active_tomo == "Tomo II" else f"Categoría {tomo1_category}")
+    m5.metric("EEq acumulado", f"{esal:,.0f}", "Dato complementario Tomo II" if st.session_state.active_tomo == "Tomo II" else f"Categoría {tomo1_category}")
+
+    if st.session_state.active_tomo == "Tomo II":
+        tomo2_tpd_category = classify_tpd(tpd_total)
+        tomo2_heavy_category = classify_heavy_pct(heavy_pct)
+        t21, t22, t23 = st.columns(3)
+        t21.metric("Categoría TPD — Tomo II", tomo2_tpd_category or "Fuera de alcance")
+        t22.metric("Categoría pesados — Tomo II", f"P{tomo2_heavy_category}%" if tomo2_heavy_category else "Fuera de alcance")
+        t23.metric("Periodo de catálogo", f"{int(years)} años")
+        if tomo2_tpd_category is None:
+            st.error("Tomo II: TPD fuera del alcance directo del catálogo (máximo 3500 veh/día en el motor normativo).")
+        if tomo2_heavy_category is None:
+            st.error("Tomo II: porcentaje de vehículos pesados fuera del alcance directo del catálogo (máximo 15%).")
+        st.info("En Tomo II, las categorías normativas visibles son TPD, porcentaje de pesados, CBR y período. La clase U1–T5 por ESAL no se usa para seleccionar el catálogo.")
 
     if st.session_state.active_tomo == "Tomo I":
         if tomo1_category == 3:
@@ -2313,6 +2335,15 @@ with p3:
 
     sclass = subgrade_class(cbr_design)
     mr_estimated = resilient_modulus(cbr_design)
+    if st.session_state.active_tomo == "Tomo II":
+        tomo2_cbr_category = classify_cbr(cbr_design)
+        sgc1, sgc2 = st.columns(2)
+        sgc1.metric("Categoría normativa CBR — Tomo II", f"CBR {tomo2_cbr_category}%" if tomo2_cbr_category is not None else "Fuera de alcance")
+        sgc2.metric("Clase geotécnica auxiliar", sclass, help="S1–S4 se conserva para visualización y análisis interno; no sustituye la categoría CBR del catálogo Tomo II.")
+        if tomo2_cbr_category is None:
+            st.error("Tomo II: CBR < 3% queda fuera del alcance directo del catálogo.")
+        else:
+            st.info("Para la selección Tomo II se utiliza la categoría CBR 3/4/6/9/11 del motor normativo. S1–S4 es una clasificación auxiliar de la aplicación.")
 
     st.markdown("#### Caracterización geotécnica complementaria")
     sg1, sg2, sg3, sg4 = st.columns(4)
@@ -2910,327 +2941,355 @@ with p4:
 
 
 with pflex:
-    st.subheader("Diseño preliminar de pavimento flexible — Tomo I")
-    st.info("Este módulo calcula el número estructural aportado por la sección propuesta y ejecuta verificaciones preliminares. No sustituye el análisis mecanístico-empírico completo de desempeño del Tomo I.")
-    if selected_row:
-        st.markdown("#### Confiabilidad y criterios de control")
-        reliability_default = {3: 75.0, 2: 85.0, 1: 95.0}.get(int(tomo1_category), 75.0)
-        rc1, rc2, rc3, rc4 = st.columns(4)
-        reliability_pct = rc1.number_input("Confiabilidad del análisis (%)", min_value=50.0, max_value=99.9, value=float(reliability_default), step=1.0, key="design_reliability_pct")
-        overall_standard_error = rc2.number_input("Error estándar global (control)", min_value=0.0, max_value=2.0, value=0.45, step=0.05, key="design_standard_error")
-        initial_serviceability = rc3.number_input("Serviciabilidad inicial", min_value=0.0, max_value=5.0, value=4.2, step=0.1, key="design_initial_serviceability")
-        terminal_serviceability = rc4.number_input("Serviciabilidad terminal", min_value=0.0, max_value=5.0, value=2.5, step=0.1, key="design_terminal_serviceability")
-        st.session_state.design_reliability = {
-            "reliability_pct": float(reliability_pct), "category_default_pct": float(reliability_default),
-            "overall_standard_error": float(overall_standard_error), "initial_serviceability": float(initial_serviceability),
-            "terminal_serviceability": float(terminal_serviceability),
-        }
-        if reliability_pct < reliability_default:
-            st.warning(f"La confiabilidad ingresada ({reliability_pct:.0f}%) es menor al valor de control preliminar asociado a Categoría {tomo1_category} ({reliability_default:.0f}%). Documente la justificación.")
-
-        st.markdown("#### Diseño preliminar AASHTO 93 — SN requerido y aportado")
-        st.caption("Este bloque es una comprobación preliminar AASHTO-93 y se mantiene separado del diseño mecanístico-empírico GDP-2024 Tomo I.")
-        f1,f2,f3,f4 = st.columns(4)
-        a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.01, max_value=1.0, value=0.44, step=0.01, key="aashto_a1")
-        a2 = f2.number_input("Coeficiente estructural base a2", min_value=0.01, max_value=1.0, value=0.14, step=0.01, key="aashto_a2")
-        a3 = f3.number_input("Coeficiente estructural subbase a3", min_value=0.01, max_value=1.0, value=0.11, step=0.01, key="aashto_a3")
-        m2 = f4.number_input("Coeficiente drenaje base m2", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m2")
-        m3 = st.number_input("Coeficiente drenaje subbase m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m3")
-
-        d1=float(selected_row['Carpeta_cm'])/2.54; d2=float(selected_row['Base_cm'])/2.54; d3=float(selected_row['Subbase_cm'])/2.54
-        sn1=a1*d1; sn2=a2*m2*d2; sn3=a3*m3*d3; sn_total=sn1+sn2+sn3
-        sn_cum1 = sn1; sn_cum2 = sn1 + sn2; sn_cum3 = sn_total
-
-        aashto_result = aashto93_required_sn(esal, mr, reliability_pct, overall_standard_error, initial_serviceability, terminal_serviceability)
-        sn_required = float(aashto_result['sn_required'])
-        aashto_complies = sn_total >= sn_required
-        layer_residuals = residual_layer_thicknesses(sn_required, a1, a2, a3, m2, m3, d1, d2)
-        st.session_state.aashto93_design = {**aashto_result, 'sn_provided': sn_total, 'complies': bool(aashto_complies),
-            'a1':a1,'a2':a2,'a3':a3,'m2':m2,'m3':m3,'D1_in':d1,'D2_in':d2,'D3_in':d3,
-            'SN1_contribution':sn1,'SN2_contribution':sn2,'SN3_contribution':sn3,
-            'SN_cumulative_1':sn_cum1,'SN_cumulative_2':sn_cum2,'SN_cumulative_3':sn_cum3, **layer_residuals}
-
-        ares1, ares2, ares3, ares4 = st.columns(4)
-        ares1.metric("SN requerido AASHTO-93", f"{sn_required:.2f}")
-        ares2.metric("SN aportado", f"{sn_total:.2f}", "Cumple" if aashto_complies else "No cumple")
-        ares3.metric("ZR", f"{aashto_result['zr']:.3f}")
-        ares4.metric("ΔPSI", f"{aashto_result['delta_psi']:.2f}")
-        st.latex(r"\log_{10}(W_{18})=Z_RS_0+9.36\log_{10}(SN+1)-0.20+\frac{\log_{10}(\Delta PSI/2.7)}{0.40+1094/(SN+1)^{5.19}}+2.32\log_{10}(M_R)-8.07")
-        st.caption(f"Sustitución: W18={esal:,.0f}; R={reliability_pct:.1f}%; ZR={aashto_result['zr']:.3f}; S0={overall_standard_error:.2f}; ΔPSI={aashto_result['delta_psi']:.2f}; Mr={mr:.2f} MPa ({aashto_result['mr_psi']:,.0f} psi).")
-
-        layer_table = pd.DataFrame([
-            ['Carpeta asfáltica','D1',d1,d1*2.54,'a1',a1,1.0,sn1,sn_cum1],
-            ['Base','D2',d2,d2*2.54,'a2',a2,m2,sn2,sn_cum2],
-            ['Subbase','D3',d3,d3*2.54,'a3',a3,m3,sn3,sn_cum3],
-        ], columns=['Capa','Espesor','D (in)','D (cm)','Coeficiente','aᵢ','mᵢ','Aporte SN','SN acumulado'])
-        st.dataframe(layer_table, use_container_width=True, hide_index=True)
-        st.latex(r"SN=a_1D_1+a_2m_2D_2+a_3m_3D_3")
-        st.write(f"**SN1 = a1·D1 = {a1:.3f}×{d1:.3f} = {sn1:.3f}**")
-        st.write(f"**SN2 (aporte base) = a2·m2·D2 = {a2:.3f}×{m2:.3f}×{d2:.3f} = {sn2:.3f}**")
-        st.write(f"**SN3 (aporte subbase) = a3·m3·D3 = {a3:.3f}×{m3:.3f}×{d3:.3f} = {sn3:.3f}**")
-
-        st.markdown("##### Despeje teórico de espesores por SN residual")
-        st.latex(r"D_2=\frac{SN_{req}-a_1D_1}{a_2m_2}")
-        st.latex(r"D_3=\frac{SN_{req}-a_1D_1-a_2m_2D_2}{a_3m_3}")
-        dr1, dr2, dr3 = st.columns(3)
-        dr1.metric("D1 si la carpeta aportara todo el SN", f"{layer_residuals['d1_if_single_layer_in']:.2f} in", f"{layer_residuals['d1_if_single_layer_in']*2.54:.1f} cm")
-        dr2.metric("D2 teórico por SN residual", f"{layer_residuals['d2_residual_in']:.2f} in", f"{layer_residuals['d2_residual_in']*2.54:.1f} cm")
-        dr3.metric("D3 teórico con D1 y D2 adoptados", f"{layer_residuals['d3_residual_in']:.2f} in", f"{layer_residuals['d3_residual_in']*2.54:.1f} cm")
-        st.info("Los espesores teóricos por SN residual deben ajustarse a mínimos constructivos, rangos GDP/CR-2020 aplicables y al análisis mecanístico-empírico; no son por sí solos una sección final.")
-
-        st.markdown("##### Control de calidad CBR de materiales granulares")
-        st.caption("Criterios incorporados como control fijo de calidad: base granular CBR ≥ 80% y subbase granular CBR ≥ 30%. Referencia de aplicación: CR-2020 Sección 301 y Subsección 703.05. Verifique además graduación, plasticidad y demás requisitos de la especificación vigente.")
-        cb1, cb2, cb3, cb4 = st.columns(4)
-        base_cbr = cb1.number_input("CBR material de base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_material_cbr")
-        cb2.metric("CBR mínimo base — CR-2020", f"{CR2020_BASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
-        subbase_cbr = cb3.number_input("CBR material de subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_material_cbr")
-        cb4.metric("CBR mínimo subbase — CR-2020", f"{CR2020_SUBBASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
-        base_cbr_min = CR2020_BASE_CBR_MIN_PCT
-        subbase_cbr_min = CR2020_SUBBASE_CBR_MIN_PCT
-        base_cbr_ok = base_cbr >= base_cbr_min; subbase_cbr_ok = subbase_cbr >= subbase_cbr_min
-        st.session_state.layer_quality_controls = {'base_cbr':base_cbr,'base_cbr_min':base_cbr_min,'base_cbr_ok':base_cbr_ok,
-            'subbase_cbr':subbase_cbr,'subbase_cbr_min':subbase_cbr_min,'subbase_cbr_ok':subbase_cbr_ok,
-            'criterion_note':'Valores mínimos configurables; verificar contra especificación vigente del proyecto.'}
-        qc1,qc2 = st.columns(2)
-        (qc1.success if base_cbr_ok else qc1.error)(f"Base: CBR {base_cbr:.1f}% {'≥' if base_cbr_ok else '<'} criterio {base_cbr_min:.1f}%")
-        (qc2.success if subbase_cbr_ok else qc2.error)(f"Subbase: CBR {subbase_cbr:.1f}% {'≥' if subbase_cbr_ok else '<'} criterio {subbase_cbr_min:.1f}%")
-
-        st.progress(min(sn_total/max(sn_required,0.01),1.0), text="Relación SN aportado / SN requerido")
-
-        st.markdown("### Respuesta mecanística de cribado — Tomo I")
-        st.warning(
-            "Este bloque todavía **no es un solver elástico multicapa definitivo**. Calcula indicadores transparentes de respuesta "
-            "para revisar la coherencia de carga, rigidez y espesores. La emisión final requiere validar estos resultados con "
-            "un motor multicapa y funciones de transferencia calibradas/aplicables al GDP-2024."
-        )
-        ml1, ml2, ml3, ml4 = st.columns(4)
-        axle_load_kn = ml1.number_input("Carga del eje de análisis (kN)", min_value=10.0, max_value=300.0, value=80.0, step=5.0, key="mech_axle_load")
-        tire_pressure_kpa = ml2.number_input("Presión de contacto/neumático (kPa)", min_value=200.0, max_value=1500.0, value=700.0, step=25.0, key="mech_tire_pressure")
-        tires_per_axle = ml3.number_input("Neumáticos equivalentes por eje", min_value=1, max_value=12, value=4, step=1, key="mech_tires_per_axle")
-        subgrade_poisson = ml4.number_input("Poisson subrasante", min_value=0.20, max_value=0.49, value=0.40, step=0.01, key="mech_subgrade_nu")
-        crit1, crit2, crit3 = st.columns(3)
-        allowable_eps_t = crit1.number_input("Criterio de control εt bajo carpeta (µε)", min_value=10.0, max_value=5000.0, value=200.0, step=10.0, key="mech_allow_eps_t", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
-        allowable_eps_v = crit2.number_input("Criterio de control εv sobre subrasante (µε)", min_value=10.0, max_value=10000.0, value=500.0, step=10.0, key="mech_allow_eps_v", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
-        allowable_stabilized_ratio = crit3.number_input("Relación esfuerzo/resistencia admisible base estabilizada", min_value=0.05, max_value=1.50, value=0.50, step=0.05, key="mech_allow_stab_ratio")
-
-        materials_for_response = st.session_state.get("design_materials", {})
-        mech_response = mechanistic_screening_response(
-            selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
-            subgrade_poisson=float(subgrade_poisson),
-        )
-        fatigue_util = mech_response["asphalt_tensile_microstrain_screening"] / max(float(allowable_eps_t), 1e-6)
-        rut_util = mech_response["subgrade_vertical_microstrain_screening"] / max(float(allowable_eps_v), 1e-6)
-        stab_util = mech_response["stabilized_stress_strength_ratio"] / max(float(allowable_stabilized_ratio), 1e-6) if mech_response["stabilized_stress_strength_ratio"] > 0 else 0.0
-        mech_response.update({
-            "allowable_asphalt_tensile_microstrain": float(allowable_eps_t),
-            "allowable_subgrade_vertical_microstrain": float(allowable_eps_v),
-            "allowable_stabilized_stress_strength_ratio": float(allowable_stabilized_ratio),
-            "fatigue_utilization_ratio": float(fatigue_util),
-            "rutting_utilization_ratio": float(rut_util),
-            "stabilized_utilization_ratio": float(stab_util),
-        })
-        st.session_state.mechanistic_screening = mech_response
-
-        st.markdown("#### Confiabilidad aplicada al resultado")
-        uq1, uq2 = st.columns(2)
-        response_log_sigma = uq1.number_input("Incertidumbre lognormal de respuesta σln", min_value=0.0, max_value=1.0, value=0.15, step=0.01, key="response_log_sigma", help="Parámetro configurable; no es un valor GDP universal.")
-        rel_multiplier = reliability_multiplier(reliability_pct, response_log_sigma)
-        fatigue_design_util = fatigue_util * rel_multiplier
-        rut_design_util = rut_util * rel_multiplier
-        uq2.metric("Multiplicador por confiabilidad", f"{rel_multiplier:.3f}", f"R = {reliability_pct:.1f}%")
-        mech_response['reliability_multiplier'] = rel_multiplier
-        mech_response['fatigue_utilization_design'] = fatigue_design_util
-        mech_response['rutting_utilization_design'] = rut_design_util
-        mech_response['response_log_sigma'] = response_log_sigma
-        st.session_state.mechanistic_screening = mech_response
-        rr1, rr2 = st.columns(2)
-        rr1.metric("Utilización fatiga a confiabilidad", f"{fatigue_design_util:.2f}", "Cumple" if fatigue_design_util <= 1 else "Revisar")
-        rr2.metric("Utilización ahuellamiento a confiabilidad", f"{rut_design_util:.2f}", "Cumple" if rut_design_util <= 1 else "Revisar")
-
-        st.markdown("#### Restricciones constructivas y optimización automática")
-        st.caption("El optimizador solo evalúa combinaciones que respetan los límites constructivos documentados. Continúa siendo un cribado hasta disponer del solver multicapa definitivo.")
-        cc1, cc2, cc3, cc4 = st.columns(4)
-        constr_asphalt_min = cc1.number_input("Carpeta mínima para optimizador (cm)", min_value=0.0, max_value=40.0, value=float(st.session_state.get('asphalt_thickness_control',{}).get('min_cm',5.0)), step=0.5, key='constr_asphalt_min')
-        constr_asphalt_max = cc2.number_input("Carpeta máxima para optimizador (cm)", min_value=0.0, max_value=80.0, value=float(st.session_state.get('asphalt_thickness_control',{}).get('max_cm',20.0)), step=0.5, key='constr_asphalt_max')
-        constr_base_min = cc3.number_input("Base mínima (cm)", min_value=0.0, max_value=100.0, value=15.0, step=1.0, key='constr_base_min')
-        constr_subbase_min = cc4.number_input("Subbase mínima (cm)", min_value=0.0, max_value=120.0, value=15.0, step=1.0, key='constr_subbase_min')
-        cc5, cc6 = st.columns(2)
-        constr_increment = cc5.selectbox("Incremento constructivo de espesores (cm)", [0.5, 1.0, 2.0], index=1, key='constr_increment')
-        constr_source = cc6.text_input("Fuente / criterio constructivo", value="Criterio del proyecto — documentar", key='constr_source')
-        construction_constraints = {
-            'asphalt_min_cm': float(constr_asphalt_min), 'asphalt_max_cm': float(constr_asphalt_max),
-            'base_min_cm': float(constr_base_min), 'subbase_min_cm': float(constr_subbase_min),
-            'increment_cm': float(constr_increment), 'source': constr_source,
-        }
-        st.session_state.construction_constraints = construction_constraints
-        current_cc = construction_constraints_check(selected_row, construction_constraints)
-        if current_cc['complies']:
-            st.success("La sección activa satisface las restricciones constructivas configuradas.")
+    if active_tomo == "Tomo II":
+        st.subheader("Diseño estructural complementario — Tomo II")
+        st.success("La estructura activa proviene del catálogo oficial GDP-2024 Tomo II y conserva sus espesores de la alternativa seleccionada.")
+        st.info("AASHTO-93, SN, optimización libre de espesores y cribado mecanístico pertenecen al flujo complementario/Tomo I y están bloqueados en este modo para no alterar silenciosamente la alternativa normativa del catálogo.")
+        if selected_row:
+            t2sum = pd.DataFrame([
+                ["Código", selected_row.get("Código", "")],
+                ["Superficie", selected_row.get("Superficie", "")],
+                ["Carpeta (cm)", selected_row.get("Carpeta_cm", 0)],
+                ["Base granular (cm)", selected_row.get("Base_granular_cm", 0)],
+                ["Base estabilizada (cm)", selected_row.get("Base_estabilizada_cm", 0)],
+                ["Subbase (cm)", selected_row.get("Subbase_cm", 0)],
+                ["Tabla de asignación", selected_row.get("Tabla_asignacion", "")],
+            ], columns=["Elemento", "Valor"])
+            st.dataframe(t2sum, use_container_width=True, hide_index=True)
+            st.caption("Para un análisis mecanístico adicional, cambie explícitamente a Tomo I e importe esta estructura para evaluación. Esa evaluación no modifica la condición original de alternativa Tomo II.")
         else:
-            failed = [k for k,v in current_cc['checks'].items() if not v]
-            st.warning("La sección activa incumple restricciones constructivas: " + ", ".join(failed))
+            st.warning("Seleccione primero una alternativa oficial en 5. Estructura.")
+    else:
+        st.subheader("Diseño preliminar de pavimento flexible — Tomo I")
+        st.info("Este módulo calcula el número estructural aportado por la sección propuesta y ejecuta verificaciones preliminares. No sustituye el análisis mecanístico-empírico completo de desempeño del Tomo I.")
+        if selected_row:
+            st.markdown("#### Confiabilidad y criterios de control")
+            reliability_default = {3: 75.0, 2: 85.0, 1: 95.0}.get(int(tomo1_category), 75.0)
+            rc1, rc2, rc3, rc4 = st.columns(4)
+            reliability_pct = rc1.number_input("Confiabilidad del análisis (%)", min_value=50.0, max_value=99.9, value=float(reliability_default), step=1.0, key="design_reliability_pct")
+            overall_standard_error = rc2.number_input("Error estándar global (control)", min_value=0.0, max_value=2.0, value=0.45, step=0.05, key="design_standard_error")
+            initial_serviceability = rc3.number_input("Serviciabilidad inicial", min_value=0.0, max_value=5.0, value=4.2, step=0.1, key="design_initial_serviceability")
+            terminal_serviceability = rc4.number_input("Serviciabilidad terminal", min_value=0.0, max_value=5.0, value=2.5, step=0.1, key="design_terminal_serviceability")
+            st.session_state.design_reliability = {
+                "reliability_pct": float(reliability_pct), "category_default_pct": float(reliability_default),
+                "overall_standard_error": float(overall_standard_error), "initial_serviceability": float(initial_serviceability),
+                "terminal_serviceability": float(terminal_serviceability),
+            }
+            if reliability_pct < reliability_default:
+                st.warning(f"La confiabilidad ingresada ({reliability_pct:.0f}%) es menor al valor de control preliminar asociado a Categoría {tomo1_category} ({reliability_default:.0f}%). Documente la justificación.")
 
-        st.markdown("#### Diseño iterativo automático — candidatos restringidos")
-        op1, op2, op3, op4 = st.columns(4)
-        opt_max_inc = op1.number_input("Incremento máximo a explorar por capa (cm)", min_value=0, max_value=30, value=8, step=2, key="opt_max_inc")
-        opt_surface_price = op2.number_input("Precio carpeta para optimización (₡/m³)", min_value=0.0, value=95000.0, step=5000.0, key="opt_surface_price")
-        opt_base_price = op3.number_input("Precio base para optimización (₡/m³)", min_value=0.0, value=28000.0, step=1000.0, key="opt_base_price")
-        opt_subbase_price = op4.number_input("Precio subbase para optimización (₡/m³)", min_value=0.0, value=22000.0, step=1000.0, key="opt_subbase_price")
-        opt_area = float(project_length_m) * float(project_width_m)
-        if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
-            opt_df = optimize_structure_with_constraints(
-                selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
-                allowable_eps_t, allowable_eps_v, reliability_pct, response_log_sigma, opt_area,
-                {'surface': opt_surface_price, 'base': opt_base_price, 'subbase': opt_subbase_price},
-                construction_constraints, float(opt_max_inc)
+            st.markdown("#### Diseño preliminar AASHTO 93 — SN requerido y aportado")
+            st.caption("Este bloque es una comprobación preliminar AASHTO-93 y se mantiene separado del diseño mecanístico-empírico GDP-2024 Tomo I.")
+            f1,f2,f3,f4 = st.columns(4)
+            a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.01, max_value=1.0, value=0.44, step=0.01, key="aashto_a1")
+            a2 = f2.number_input("Coeficiente estructural base a2", min_value=0.01, max_value=1.0, value=0.14, step=0.01, key="aashto_a2")
+            a3 = f3.number_input("Coeficiente estructural subbase a3", min_value=0.01, max_value=1.0, value=0.11, step=0.01, key="aashto_a3")
+            m2 = f4.number_input("Coeficiente drenaje base m2", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m2")
+            m3 = st.number_input("Coeficiente drenaje subbase m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m3")
+
+            d1=float(selected_row['Carpeta_cm'])/2.54; d2=float(selected_row['Base_cm'])/2.54; d3=float(selected_row['Subbase_cm'])/2.54
+            sn1=a1*d1; sn2=a2*m2*d2; sn3=a3*m3*d3; sn_total=sn1+sn2+sn3
+            sn_cum1 = sn1; sn_cum2 = sn1 + sn2; sn_cum3 = sn_total
+
+            aashto_result = aashto93_required_sn(esal, mr, reliability_pct, overall_standard_error, initial_serviceability, terminal_serviceability)
+            sn_required = float(aashto_result['sn_required'])
+            aashto_complies = sn_total >= sn_required
+            layer_residuals = residual_layer_thicknesses(sn_required, a1, a2, a3, m2, m3, d1, d2)
+            st.session_state.aashto93_design = {**aashto_result, 'sn_provided': sn_total, 'complies': bool(aashto_complies),
+                'a1':a1,'a2':a2,'a3':a3,'m2':m2,'m3':m3,'D1_in':d1,'D2_in':d2,'D3_in':d3,
+                'SN1_contribution':sn1,'SN2_contribution':sn2,'SN3_contribution':sn3,
+                'SN_cumulative_1':sn_cum1,'SN_cumulative_2':sn_cum2,'SN_cumulative_3':sn_cum3, **layer_residuals}
+
+            ares1, ares2, ares3, ares4 = st.columns(4)
+            ares1.metric("SN requerido AASHTO-93", f"{sn_required:.2f}")
+            ares2.metric("SN aportado", f"{sn_total:.2f}", "Cumple" if aashto_complies else "No cumple")
+            ares3.metric("ZR", f"{aashto_result['zr']:.3f}")
+            ares4.metric("ΔPSI", f"{aashto_result['delta_psi']:.2f}")
+            st.latex(r"\log_{10}(W_{18})=Z_RS_0+9.36\log_{10}(SN+1)-0.20+\frac{\log_{10}(\Delta PSI/2.7)}{0.40+1094/(SN+1)^{5.19}}+2.32\log_{10}(M_R)-8.07")
+            st.caption(f"Sustitución: W18={esal:,.0f}; R={reliability_pct:.1f}%; ZR={aashto_result['zr']:.3f}; S0={overall_standard_error:.2f}; ΔPSI={aashto_result['delta_psi']:.2f}; Mr={mr:.2f} MPa ({aashto_result['mr_psi']:,.0f} psi).")
+
+            layer_table = pd.DataFrame([
+                ['Carpeta asfáltica','D1',d1,d1*2.54,'a1',a1,1.0,sn1,sn_cum1],
+                ['Base','D2',d2,d2*2.54,'a2',a2,m2,sn2,sn_cum2],
+                ['Subbase','D3',d3,d3*2.54,'a3',a3,m3,sn3,sn_cum3],
+            ], columns=['Capa','Espesor','D (in)','D (cm)','Coeficiente','aᵢ','mᵢ','Aporte SN','SN acumulado'])
+            st.dataframe(layer_table, use_container_width=True, hide_index=True)
+            st.latex(r"SN=a_1D_1+a_2m_2D_2+a_3m_3D_3")
+            st.write(f"**SN1 = a1·D1 = {a1:.3f}×{d1:.3f} = {sn1:.3f}**")
+            st.write(f"**SN2 (aporte base) = a2·m2·D2 = {a2:.3f}×{m2:.3f}×{d2:.3f} = {sn2:.3f}**")
+            st.write(f"**SN3 (aporte subbase) = a3·m3·D3 = {a3:.3f}×{m3:.3f}×{d3:.3f} = {sn3:.3f}**")
+
+            st.markdown("##### Despeje teórico de espesores por SN residual")
+            st.latex(r"D_2=\frac{SN_{req}-a_1D_1}{a_2m_2}")
+            st.latex(r"D_3=\frac{SN_{req}-a_1D_1-a_2m_2D_2}{a_3m_3}")
+            dr1, dr2, dr3 = st.columns(3)
+            dr1.metric("D1 si la carpeta aportara todo el SN", f"{layer_residuals['d1_if_single_layer_in']:.2f} in", f"{layer_residuals['d1_if_single_layer_in']*2.54:.1f} cm")
+            dr2.metric("D2 teórico por SN residual", f"{layer_residuals['d2_residual_in']:.2f} in", f"{layer_residuals['d2_residual_in']*2.54:.1f} cm")
+            dr3.metric("D3 teórico con D1 y D2 adoptados", f"{layer_residuals['d3_residual_in']:.2f} in", f"{layer_residuals['d3_residual_in']*2.54:.1f} cm")
+            st.info("Los espesores teóricos por SN residual deben ajustarse a mínimos constructivos, rangos GDP/CR-2020 aplicables y al análisis mecanístico-empírico; no son por sí solos una sección final.")
+
+            st.markdown("##### Control de calidad CBR de materiales granulares")
+            st.caption("Criterios incorporados como control fijo de calidad: base granular CBR ≥ 80% y subbase granular CBR ≥ 30%. Referencia de aplicación: CR-2020 Sección 301 y Subsección 703.05. Verifique además graduación, plasticidad y demás requisitos de la especificación vigente.")
+            cb1, cb2, cb3, cb4 = st.columns(4)
+            base_cbr = cb1.number_input("CBR material de base (%)", min_value=0.0, max_value=200.0, value=80.0, step=1.0, key="base_material_cbr")
+            cb2.metric("CBR mínimo base — CR-2020", f"{CR2020_BASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
+            subbase_cbr = cb3.number_input("CBR material de subbase (%)", min_value=0.0, max_value=200.0, value=30.0, step=1.0, key="subbase_material_cbr")
+            cb4.metric("CBR mínimo subbase — CR-2020", f"{CR2020_SUBBASE_CBR_MIN_PCT:.0f}%", help=CR2020_GRANULAR_QUALITY_REFERENCE)
+            base_cbr_min = CR2020_BASE_CBR_MIN_PCT
+            subbase_cbr_min = CR2020_SUBBASE_CBR_MIN_PCT
+            base_cbr_ok = base_cbr >= base_cbr_min; subbase_cbr_ok = subbase_cbr >= subbase_cbr_min
+            st.session_state.layer_quality_controls = {'base_cbr':base_cbr,'base_cbr_min':base_cbr_min,'base_cbr_ok':base_cbr_ok,
+                'subbase_cbr':subbase_cbr,'subbase_cbr_min':subbase_cbr_min,'subbase_cbr_ok':subbase_cbr_ok,
+                'criterion_note':'Valores mínimos configurables; verificar contra especificación vigente del proyecto.'}
+            qc1,qc2 = st.columns(2)
+            (qc1.success if base_cbr_ok else qc1.error)(f"Base: CBR {base_cbr:.1f}% {'≥' if base_cbr_ok else '<'} criterio {base_cbr_min:.1f}%")
+            (qc2.success if subbase_cbr_ok else qc2.error)(f"Subbase: CBR {subbase_cbr:.1f}% {'≥' if subbase_cbr_ok else '<'} criterio {subbase_cbr_min:.1f}%")
+
+            st.progress(min(sn_total/max(sn_required,0.01),1.0), text="Relación SN aportado / SN requerido")
+
+            st.markdown("### Respuesta mecanística de cribado — Tomo I")
+            st.warning(
+                "Este bloque todavía **no es un solver elástico multicapa definitivo**. Calcula indicadores transparentes de respuesta "
+                "para revisar la coherencia de carga, rigidez y espesores. La emisión final requiere validar estos resultados con "
+                "un motor multicapa y funciones de transferencia calibradas/aplicables al GDP-2024."
             )
-            st.session_state.optimization_candidates = opt_df
-        opt_show = st.session_state.get('optimization_candidates', pd.DataFrame())
-        if isinstance(opt_show, pd.DataFrame) and not opt_show.empty:
-            compliant_count = int((opt_show['Cumple_cribado'] == 'Sí').sum())
-            st.success(f"Se generaron {len(opt_show)} candidatos; {compliant_count} cumplen el cribado a confiabilidad configurado.")
-            st.dataframe(opt_show.head(25), use_container_width=True, hide_index=True)
+            ml1, ml2, ml3, ml4 = st.columns(4)
+            axle_load_kn = ml1.number_input("Carga del eje de análisis (kN)", min_value=10.0, max_value=300.0, value=80.0, step=5.0, key="mech_axle_load")
+            tire_pressure_kpa = ml2.number_input("Presión de contacto/neumático (kPa)", min_value=200.0, max_value=1500.0, value=700.0, step=25.0, key="mech_tire_pressure")
+            tires_per_axle = ml3.number_input("Neumáticos equivalentes por eje", min_value=1, max_value=12, value=4, step=1, key="mech_tires_per_axle")
+            subgrade_poisson = ml4.number_input("Poisson subrasante", min_value=0.20, max_value=0.49, value=0.40, step=0.01, key="mech_subgrade_nu")
+            crit1, crit2, crit3 = st.columns(3)
+            allowable_eps_t = crit1.number_input("Criterio de control εt bajo carpeta (µε)", min_value=10.0, max_value=5000.0, value=200.0, step=10.0, key="mech_allow_eps_t", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
+            allowable_eps_v = crit2.number_input("Criterio de control εv sobre subrasante (µε)", min_value=10.0, max_value=10000.0, value=500.0, step=10.0, key="mech_allow_eps_v", help="Valor de control definido por el diseñador/procedimiento validado; no se presenta como límite normativo universal.")
+            allowable_stabilized_ratio = crit3.number_input("Relación esfuerzo/resistencia admisible base estabilizada", min_value=0.05, max_value=1.50, value=0.50, step=0.05, key="mech_allow_stab_ratio")
 
-        mr1, mr2, mr3, mr4 = st.columns(4)
-        mr1.metric("Radio de contacto", f"{mech_response['contact_radius_m']*1000:.0f} mm")
-        mr2.metric("εt bajo carpeta — cribado", f"{mech_response['asphalt_tensile_microstrain_screening']:.0f} µε", f"Utilización {fatigue_util:.2f}")
-        mr3.metric("εv sobre subrasante — cribado", f"{mech_response['subgrade_vertical_microstrain_screening']:.0f} µε", f"Utilización {rut_util:.2f}")
-        mr4.metric("Profundidad equivalente", f"{mech_response['equivalent_depth_to_subgrade_m']:.2f} m")
+            materials_for_response = st.session_state.get("design_materials", {})
+            mech_response = mechanistic_screening_response(
+                selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
+                subgrade_poisson=float(subgrade_poisson),
+            )
+            fatigue_util = mech_response["asphalt_tensile_microstrain_screening"] / max(float(allowable_eps_t), 1e-6)
+            rut_util = mech_response["subgrade_vertical_microstrain_screening"] / max(float(allowable_eps_v), 1e-6)
+            stab_util = mech_response["stabilized_stress_strength_ratio"] / max(float(allowable_stabilized_ratio), 1e-6) if mech_response["stabilized_stress_strength_ratio"] > 0 else 0.0
+            mech_response.update({
+                "allowable_asphalt_tensile_microstrain": float(allowable_eps_t),
+                "allowable_subgrade_vertical_microstrain": float(allowable_eps_v),
+                "allowable_stabilized_stress_strength_ratio": float(allowable_stabilized_ratio),
+                "fatigue_utilization_ratio": float(fatigue_util),
+                "rutting_utilization_ratio": float(rut_util),
+                "stabilized_utilization_ratio": float(stab_util),
+            })
+            st.session_state.mechanistic_screening = mech_response
 
-        response_df = pd.DataFrame([
-            ["Carga por neumático", mech_response["tire_load_kn"], "kN", "Entrada derivada"],
-            ["Esfuerzo indicador bajo carpeta", mech_response["sigma_bottom_asphalt_mpa"], "MPa", "Cribado"],
-            ["Deformación tracción bajo carpeta", mech_response["asphalt_tensile_microstrain_screening"], "µε", "Cribado fatiga"],
-            ["Esfuerzo indicador sobre subrasante", mech_response["sigma_top_subgrade_mpa"], "MPa", "Cribado"],
-            ["Deformación vertical sobre subrasante", mech_response["subgrade_vertical_microstrain_screening"], "µε", "Cribado ahuellamiento"],
-            ["Esfuerzo base estabilizada", mech_response["stabilized_stress_mpa"], "MPa", "Cribado semirrígido"],
-        ], columns=["Respuesta", "Valor", "Unidad", "Uso"])
-        st.dataframe(response_df, use_container_width=True, hide_index=True)
-        if fatigue_util > 1.0:
-            st.error("El indicador εt supera el criterio de control configurado. Revise espesor/rigidez de carpeta, soporte y carga antes de avanzar.")
-        else:
-            st.success("El indicador εt se mantiene dentro del criterio de control configurado para este cribado.")
-        if rut_util > 1.0:
-            st.error("El indicador εv sobre subrasante supera el criterio configurado. Revise capas granulares, mejoramiento, Mr y drenaje.")
-        else:
-            st.success("El indicador εv se mantiene dentro del criterio de control configurado para este cribado.")
-        if mech_response["stabilized_stress_strength_ratio"] > 0:
-            if mech_response["stabilized_stress_strength_ratio"] > allowable_stabilized_ratio:
-                st.error("La relación esfuerzo/resistencia de cribado de la base estabilizada supera el criterio configurado.")
+            st.markdown("#### Confiabilidad aplicada al resultado")
+            uq1, uq2 = st.columns(2)
+            response_log_sigma = uq1.number_input("Incertidumbre lognormal de respuesta σln", min_value=0.0, max_value=1.0, value=0.15, step=0.01, key="response_log_sigma", help="Parámetro configurable; no es un valor GDP universal.")
+            rel_multiplier = reliability_multiplier(reliability_pct, response_log_sigma)
+            fatigue_design_util = fatigue_util * rel_multiplier
+            rut_design_util = rut_util * rel_multiplier
+            uq2.metric("Multiplicador por confiabilidad", f"{rel_multiplier:.3f}", f"R = {reliability_pct:.1f}%")
+            mech_response['reliability_multiplier'] = rel_multiplier
+            mech_response['fatigue_utilization_design'] = fatigue_design_util
+            mech_response['rutting_utilization_design'] = rut_design_util
+            mech_response['response_log_sigma'] = response_log_sigma
+            st.session_state.mechanistic_screening = mech_response
+            rr1, rr2 = st.columns(2)
+            rr1.metric("Utilización fatiga a confiabilidad", f"{fatigue_design_util:.2f}", "Cumple" if fatigue_design_util <= 1 else "Revisar")
+            rr2.metric("Utilización ahuellamiento a confiabilidad", f"{rut_design_util:.2f}", "Cumple" if rut_design_util <= 1 else "Revisar")
+
+            st.markdown("#### Restricciones constructivas y optimización automática")
+            st.caption("El optimizador solo evalúa combinaciones que respetan los límites constructivos documentados. Continúa siendo un cribado hasta disponer del solver multicapa definitivo.")
+            cc1, cc2, cc3, cc4 = st.columns(4)
+            constr_asphalt_min = cc1.number_input("Carpeta mínima para optimizador (cm)", min_value=0.0, max_value=40.0, value=float(st.session_state.get('asphalt_thickness_control',{}).get('min_cm',5.0)), step=0.5, key='constr_asphalt_min')
+            constr_asphalt_max = cc2.number_input("Carpeta máxima para optimizador (cm)", min_value=0.0, max_value=80.0, value=float(st.session_state.get('asphalt_thickness_control',{}).get('max_cm',20.0)), step=0.5, key='constr_asphalt_max')
+            constr_base_min = cc3.number_input("Base mínima (cm)", min_value=0.0, max_value=100.0, value=15.0, step=1.0, key='constr_base_min')
+            constr_subbase_min = cc4.number_input("Subbase mínima (cm)", min_value=0.0, max_value=120.0, value=15.0, step=1.0, key='constr_subbase_min')
+            cc5, cc6 = st.columns(2)
+            constr_increment = cc5.selectbox("Incremento constructivo de espesores (cm)", [0.5, 1.0, 2.0], index=1, key='constr_increment')
+            constr_source = cc6.text_input("Fuente / criterio constructivo", value="Criterio del proyecto — documentar", key='constr_source')
+            construction_constraints = {
+                'asphalt_min_cm': float(constr_asphalt_min), 'asphalt_max_cm': float(constr_asphalt_max),
+                'base_min_cm': float(constr_base_min), 'subbase_min_cm': float(constr_subbase_min),
+                'increment_cm': float(constr_increment), 'source': constr_source,
+            }
+            st.session_state.construction_constraints = construction_constraints
+            current_cc = construction_constraints_check(selected_row, construction_constraints)
+            if current_cc['complies']:
+                st.success("La sección activa satisface las restricciones constructivas configuradas.")
             else:
-                st.success("La base estabilizada se mantiene dentro del criterio esfuerzo/resistencia configurado para este cribado.")
-        st.caption("Método del bloque: " + mech_response["method"] + ". " + mech_response["limitations"])
+                failed = [k for k,v in current_cc['checks'].items() if not v]
+                st.warning("La sección activa incumple restricciones constructivas: " + ", ".join(failed))
 
-        if float(selected_row['Carpeta_cm']) <= 0 and selected_row['Superficie'] == 'Tratamiento superficial': st.warning("La alternativa usa tratamiento superficial; revise que el nivel de tránsito, el desempeño esperado y los materiales sean compatibles con el alcance del catálogo.")
-        if tp_ltpp >= 45: st.warning("Temperatura alta del pavimento: revise el módulo dinámico de la mezcla y el riesgo de ahuellamiento.")
-        if m2 < 0.8 or m3 < 0.8: st.warning("Los coeficientes de drenaje reducen de forma importante el aporte estructural de las capas granulares.")
-        st.session_state.flex_design={"a1":a1,"a2":a2,"a3":a3,"m2":m2,"m3":m3,"sn":sn_total,"reliability_pct":reliability_pct,"overall_standard_error":overall_standard_error,"initial_serviceability":initial_serviceability,"terminal_serviceability":terminal_serviceability,"mechanistic_screening":st.session_state.get("mechanistic_screening",{})}
-    else: st.info("Seleccione una estructura para activar el diseño flexible.")
+            st.markdown("#### Diseño iterativo automático — candidatos restringidos")
+            op1, op2, op3, op4 = st.columns(4)
+            opt_max_inc = op1.number_input("Incremento máximo a explorar por capa (cm)", min_value=0, max_value=30, value=8, step=2, key="opt_max_inc")
+            opt_surface_price = op2.number_input("Precio carpeta para optimización (₡/m³)", min_value=0.0, value=95000.0, step=5000.0, key="opt_surface_price")
+            opt_base_price = op3.number_input("Precio base para optimización (₡/m³)", min_value=0.0, value=28000.0, step=1000.0, key="opt_base_price")
+            opt_subbase_price = op4.number_input("Precio subbase para optimización (₡/m³)", min_value=0.0, value=22000.0, step=1000.0, key="opt_subbase_price")
+            opt_area = float(project_length_m) * float(project_width_m)
+            if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
+                opt_df = optimize_structure_with_constraints(
+                    selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
+                    allowable_eps_t, allowable_eps_v, reliability_pct, response_log_sigma, opt_area,
+                    {'surface': opt_surface_price, 'base': opt_base_price, 'subbase': opt_subbase_price},
+                    construction_constraints, float(opt_max_inc)
+                )
+                st.session_state.optimization_candidates = opt_df
+            opt_show = st.session_state.get('optimization_candidates', pd.DataFrame())
+            if isinstance(opt_show, pd.DataFrame) and not opt_show.empty:
+                compliant_count = int((opt_show['Cumple_cribado'] == 'Sí').sum())
+                st.success(f"Se generaron {len(opt_show)} candidatos; {compliant_count} cumplen el cribado a confiabilidad configurado.")
+                st.dataframe(opt_show.head(25), use_container_width=True, hide_index=True)
+
+            mr1, mr2, mr3, mr4 = st.columns(4)
+            mr1.metric("Radio de contacto", f"{mech_response['contact_radius_m']*1000:.0f} mm")
+            mr2.metric("εt bajo carpeta — cribado", f"{mech_response['asphalt_tensile_microstrain_screening']:.0f} µε", f"Utilización {fatigue_util:.2f}")
+            mr3.metric("εv sobre subrasante — cribado", f"{mech_response['subgrade_vertical_microstrain_screening']:.0f} µε", f"Utilización {rut_util:.2f}")
+            mr4.metric("Profundidad equivalente", f"{mech_response['equivalent_depth_to_subgrade_m']:.2f} m")
+
+            response_df = pd.DataFrame([
+                ["Carga por neumático", mech_response["tire_load_kn"], "kN", "Entrada derivada"],
+                ["Esfuerzo indicador bajo carpeta", mech_response["sigma_bottom_asphalt_mpa"], "MPa", "Cribado"],
+                ["Deformación tracción bajo carpeta", mech_response["asphalt_tensile_microstrain_screening"], "µε", "Cribado fatiga"],
+                ["Esfuerzo indicador sobre subrasante", mech_response["sigma_top_subgrade_mpa"], "MPa", "Cribado"],
+                ["Deformación vertical sobre subrasante", mech_response["subgrade_vertical_microstrain_screening"], "µε", "Cribado ahuellamiento"],
+                ["Esfuerzo base estabilizada", mech_response["stabilized_stress_mpa"], "MPa", "Cribado semirrígido"],
+            ], columns=["Respuesta", "Valor", "Unidad", "Uso"])
+            st.dataframe(response_df, use_container_width=True, hide_index=True)
+            if fatigue_util > 1.0:
+                st.error("El indicador εt supera el criterio de control configurado. Revise espesor/rigidez de carpeta, soporte y carga antes de avanzar.")
+            else:
+                st.success("El indicador εt se mantiene dentro del criterio de control configurado para este cribado.")
+            if rut_util > 1.0:
+                st.error("El indicador εv sobre subrasante supera el criterio configurado. Revise capas granulares, mejoramiento, Mr y drenaje.")
+            else:
+                st.success("El indicador εv se mantiene dentro del criterio de control configurado para este cribado.")
+            if mech_response["stabilized_stress_strength_ratio"] > 0:
+                if mech_response["stabilized_stress_strength_ratio"] > allowable_stabilized_ratio:
+                    st.error("La relación esfuerzo/resistencia de cribado de la base estabilizada supera el criterio configurado.")
+                else:
+                    st.success("La base estabilizada se mantiene dentro del criterio esfuerzo/resistencia configurado para este cribado.")
+            st.caption("Método del bloque: " + mech_response["method"] + ". " + mech_response["limitations"])
+
+            if float(selected_row['Carpeta_cm']) <= 0 and selected_row['Superficie'] == 'Tratamiento superficial': st.warning("La alternativa usa tratamiento superficial; revise que el nivel de tránsito, el desempeño esperado y los materiales sean compatibles con el alcance del catálogo.")
+            if tp_ltpp >= 45: st.warning("Temperatura alta del pavimento: revise el módulo dinámico de la mezcla y el riesgo de ahuellamiento.")
+            if m2 < 0.8 or m3 < 0.8: st.warning("Los coeficientes de drenaje reducen de forma importante el aporte estructural de las capas granulares.")
+            st.session_state.flex_design={"a1":a1,"a2":a2,"a3":a3,"m2":m2,"m3":m3,"sn":sn_total,"reliability_pct":reliability_pct,"overall_standard_error":overall_standard_error,"initial_serviceability":initial_serviceability,"terminal_serviceability":terminal_serviceability,"mechanistic_screening":st.session_state.get("mechanistic_screening",{})}
+        else: st.info("Seleccione una estructura para activar el diseño flexible.")
 
 with pperf:
-    st.subheader("Monitoreo de deterioro — evaluación preliminar del Tomo I")
-    st.warning("Las curvas son indicadores preliminares normalizados para comparar escenarios. Para emitir un diseño final deben sustituirse por la respuesta multicapa, modelos constitutivos y calibraciones aplicables del Tomo I.")
-    if selected_row:
-        mech_state = st.session_state.get("mechanistic_screening", {})
-        if mech_state:
-            st.markdown("#### Vínculo con respuesta estructural")
-            ms1, ms2, ms3 = st.columns(3)
-            ms1.metric("Utilización fatiga εt", f"{float(mech_state.get('fatigue_utilization_ratio',0)):.2f}")
-            ms2.metric("Utilización ahuellamiento εv", f"{float(mech_state.get('rutting_utilization_ratio',0)):.2f}")
-            ms3.metric("Carga de análisis", f"{float(mech_state.get('axle_load_kn',0)):.0f} kN")
-            st.info("Estas utilizaciones sirven para priorizar revisión estructural. Las curvas de deterioro inferiores continúan siendo preliminares y todavía no constituyen funciones de transferencia GDP calibradas.")
+    if active_tomo == "Tomo II":
+        st.subheader("Desempeño y conservación — Tomo II")
+        st.info("El Tomo II selecciona estructuras por catálogo. Las curvas mecanístico-empíricas de fatiga/ahuellamiento no forman parte del flujo normativo simplificado y se mantienen desactivadas en este modo.")
+        if selected_row:
+            st.success(f"Alternativa oficial activa: {selected_row.get('Código','')} · {selected_row.get('Superficie','')}")
+            st.caption("Use Costos, Ciclo de vida, Drenaje, Control CR-2020 e Informe para la evaluación complementaria. Si requiere respuesta mecanística, cambie a Tomo I e importe la sección explícitamente.")
         else:
-            st.warning("Ejecute primero la respuesta mecanística de cribado en **6. Diseño flexible** para vincular deformaciones críticas con este módulo.")
-        st.markdown("#### Funciones de transferencia configurables")
-        transfer_enabled = st.checkbox("Activar modelo configurable de daño (requiere calibración del proyecto)", value=False, key="transfer_enabled")
-        tf1, tf2, tf3, tf4 = st.columns(4)
-        transfer_reference_esal = tf1.number_input("ESAL de referencia del modelo", min_value=1.0, value=1_000_000.0, step=100_000.0, key="transfer_ref_esal")
-        fatigue_exponent = tf2.number_input("Exponente de transferencia fatiga", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_fatigue_exp")
-        rutting_exponent = tf3.number_input("Exponente de transferencia ahuellamiento", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_rut_exp")
-        transfer_sigma = tf4.number_input("σln del modelo de transferencia", min_value=0.0, max_value=1.0, value=float(st.session_state.get('mechanistic_screening',{}).get('response_log_sigma',0.15)), step=0.01, key="transfer_sigma")
-        climate_factor_tf = float(st.session_state.get('climate_material', {}).get('relative_climate_factor', 1.0) or 1.0)
-        transfer_result = {}
-        if transfer_enabled and mech_state:
-            transfer_result = configurable_transfer_damage(
-                mech_state, esal, climate_factor_tf, float(st.session_state.get('design_reliability',{}).get('reliability_pct',75.0)),
-                transfer_sigma, transfer_reference_esal, fatigue_exponent, rutting_exponent
-            )
-            st.session_state.transfer_model = transfer_result
-            td1, td2, td3 = st.columns(3)
-            td1.metric("Daño fatiga de diseño", f"{transfer_result['fatigue_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['fatigue_damage_design'] <= 1 else ">1 revisar")
-            td2.metric("Daño ahuellamiento de diseño", f"{transfer_result['rutting_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['rutting_damage_design'] <= 1 else ">1 revisar")
-            td3.metric("Factor climático E*", f"{climate_factor_tf:.3f}")
-            st.warning("Estos índices son configurables y **no se identifican como funciones de transferencia oficiales GDP-2024** hasta introducir y validar una calibración específica.")
-        else:
-            st.session_state.transfer_model = {'enabled': False, 'calibration_status': 'Desactivado / pendiente de calibración'}
-
-        pc1,pc2,pc3,pc4 = st.columns(4)
-        with pc1:
-            perf_years = st.number_input("Horizonte de monitoreo (años)", 1, 40, int(years), key="perf_years")
-        with pc2:
-            drainage_perf = st.number_input("Factor relativo de drenaje", .55, 1.40, float(st.session_state.get("flex_design",{}).get("m2",1.0)), .05, key="perf_drain")
-        with pc3:
-            fatigue_limit = st.number_input("Límite de fatiga (%)", 1.0, 100.0, 20.0, 1.0)
-        with pc4:
-            rut_limit = st.number_input("Límite de ahuellamiento (mm)", 1.0, 40.0, 20.0, 1.0)
-        asphalt_eff = float(selected_row['Carpeta_cm']) if float(selected_row['Carpeta_cm']) > 0 else 2.0
-        perf_df = performance_curves(perf_years, esal, tp_ltpp, cbr_design, asphalt_eff, drainage_perf)
-        st.session_state.performance_df = perf_df
-        last = perf_df.iloc[-1]
-        g1,g2,g3,g4,g5=st.columns(5)
-        g1.metric("Fatiga final",f"{last['Fatiga (%)']:.1f}%", "Cumple" if last['Fatiga (%)']<=fatigue_limit else "Supera límite")
-        g2.metric("Ahuellamiento final",f"{last['Ahuellamiento (mm)']:.1f} mm", "Cumple" if last['Ahuellamiento (mm)']<=rut_limit else "Supera límite")
-        g3.metric("Fisura longitudinal",f"{last['Fisuras longitudinales (%)']:.1f}%")
-        g4.metric("Fisura por bloque",f"{last['Fisuras por bloque (%)']:.1f}%")
-        g5.metric("PCI estimado",f"{last['PCI estimado']:.0f}")
-
-        st.markdown("### Modelo 3D del deterioro del pavimento")
-        st.caption("Visualización didáctica vinculada a las curvas preliminares de desempeño. Las patologías se representan sobre la superficie según el año y severidad seleccionados.")
-        dctrl, dview = st.columns([0.27,0.73], gap="large")
-        with dctrl:
-            year_3d = st.slider("Año a visualizar en 3D", 0, int(perf_years), int(perf_years), 1, key="perf_3d_year")
-            visible_pathologies = st.multiselect(
-                "Patologías visibles",
-                ["Fatiga","Ahuellamiento","Fisuras longitudinales","Fisuras por bloque","Fisuración térmica"],
-                default=["Fatiga","Ahuellamiento","Fisuras longitudinales","Fisuras por bloque"],
-                key="perf_3d_pathologies"
-            )
-            perf_state = perf_df.loc[perf_df['Año']==year_3d].iloc[0].to_dict()
-            st.metric("PCI en el año seleccionado", f"{perf_state['PCI estimado']:.0f}")
-            st.markdown(
-                f"""
-                <div class='panel-card'>
-                  <div class='panel-title'>Severidad visual</div>
-                  <div class='alert-row'>Fatiga: <b>{perf_state['Fatiga (%)']:.1f}%</b> · {pathology_severity(perf_state['Fatiga (%)'],10,20)}</div>
-                  <div class='alert-row'>Ahuellamiento: <b>{perf_state['Ahuellamiento (mm)']:.1f} mm</b> · {pathology_severity(perf_state['Ahuellamiento (mm)'],8,15)}</div>
-                  <div class='alert-row'>Fisuras longitudinales: <b>{perf_state['Fisuras longitudinales (%)']:.1f}%</b> · {pathology_severity(perf_state['Fisuras longitudinales (%)'],10,20)}</div>
-                  <div class='alert-row'>Fisuras por bloque: <b>{perf_state['Fisuras por bloque (%)']:.1f}%</b> · {pathology_severity(perf_state['Fisuras por bloque (%)'],10,20)}</div>
-                </div>
-                """, unsafe_allow_html=True
-            )
-            st.info("La representación 3D es cualitativa y escala visualmente la severidad. No equivale a una simulación mecánica ni a una inspección PCI de campo.")
-        with dview:
-            perf_3d = deterioration_3d_figure(selected_row, sclass, cbr_design, perf_state, visible_pathologies)
-            render_rotating_3d(perf_3d, key=f"performance_{year_3d}", height=650, auto_rotate=bool(st.session_state.get("auto_rotate_3d", True)))
-
-        r1,r2=st.columns(2)
-        with r1:
-            st.plotly_chart(performance_plot(perf_df,"Fatiga (%)","Fatiga / área agrietada","Daño acumulado (%)",fatigue_limit,f"Límite {fatigue_limit:.0f}%"),use_container_width=True,config={"displaylogo":False})
-            st.plotly_chart(performance_plot(perf_df,"Fisuras longitudinales (%)","Fisuras longitudinales","Densidad (%)",30.0,"Referencia 30%"),use_container_width=True,config={"displaylogo":False})
-        with r2:
-            st.plotly_chart(performance_plot(perf_df,"Ahuellamiento (mm)","Ahuellamiento total","Deformación (mm)",rut_limit,f"Límite {rut_limit:.0f} mm"),use_container_width=True,config={"displaylogo":False})
-            st.plotly_chart(performance_plot(perf_df,"Fisuras por bloque (%)","Fisuras por bloque","Densidad (%)",30.0,"Referencia 30%"),use_container_width=True,config={"displaylogo":False})
-        pci_fig=go.Figure(go.Scatter(x=perf_df['Año'],y=perf_df['PCI estimado'],mode='lines+markers',line=dict(color='#159947',width=4),marker=dict(size=7)))
-        pci_fig.add_hline(y=70,line_dash='dash',line_color='#f5a000',annotation_text='PCI 70')
-        pci_fig.add_hline(y=55,line_dash='dash',line_color='#ef3340',annotation_text='PCI 55')
-        pci_fig.update_layout(height=320,title='Índice de condición estimado',xaxis_title='Años',yaxis_title='PCI',yaxis_range=[0,100],plot_bgcolor='#f8fbff',paper_bgcolor='white')
-        st.plotly_chart(pci_fig,use_container_width=True,config={"displaylogo":False})
-        if last['Fatiga (%)']>fatigue_limit: st.error("La estimación preliminar supera el límite de fatiga configurado. Revise espesores, módulo de mezcla, tránsito y confiabilidad.")
-        if last['Ahuellamiento (mm)']>rut_limit: st.error("La estimación preliminar supera el límite de ahuellamiento. Revise temperatura, mezcla asfáltica, capas granulares, subrasante y drenaje.")
-        if last['PCI estimado']<70: st.warning("El PCI estimado cae por debajo de 70 durante el horizonte analizado; programe mantenimiento preventivo o rehabilitación.")
-        st.download_button("Descargar curvas de desempeño (CSV)",perf_df.to_csv(index=False).encode('utf-8-sig'),"curvas_desempeno_preliminar.csv","text/csv")
+            st.warning("Seleccione una alternativa oficial para continuar.")
     else:
-        st.info("Seleccione una estructura para activar el monitoreo de desempeño.")
+        st.subheader("Monitoreo de deterioro — evaluación preliminar del Tomo I")
+        st.warning("Las curvas son indicadores preliminares normalizados para comparar escenarios. Para emitir un diseño final deben sustituirse por la respuesta multicapa, modelos constitutivos y calibraciones aplicables del Tomo I.")
+        if selected_row:
+            mech_state = st.session_state.get("mechanistic_screening", {})
+            if mech_state:
+                st.markdown("#### Vínculo con respuesta estructural")
+                ms1, ms2, ms3 = st.columns(3)
+                ms1.metric("Utilización fatiga εt", f"{float(mech_state.get('fatigue_utilization_ratio',0)):.2f}")
+                ms2.metric("Utilización ahuellamiento εv", f"{float(mech_state.get('rutting_utilization_ratio',0)):.2f}")
+                ms3.metric("Carga de análisis", f"{float(mech_state.get('axle_load_kn',0)):.0f} kN")
+                st.info("Estas utilizaciones sirven para priorizar revisión estructural. Las curvas de deterioro inferiores continúan siendo preliminares y todavía no constituyen funciones de transferencia GDP calibradas.")
+            else:
+                st.warning("Ejecute primero la respuesta mecanística de cribado en **6. Diseño flexible** para vincular deformaciones críticas con este módulo.")
+            st.markdown("#### Funciones de transferencia configurables")
+            transfer_enabled = st.checkbox("Activar modelo configurable de daño (requiere calibración del proyecto)", value=False, key="transfer_enabled")
+            tf1, tf2, tf3, tf4 = st.columns(4)
+            transfer_reference_esal = tf1.number_input("ESAL de referencia del modelo", min_value=1.0, value=1_000_000.0, step=100_000.0, key="transfer_ref_esal")
+            fatigue_exponent = tf2.number_input("Exponente de transferencia fatiga", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_fatigue_exp")
+            rutting_exponent = tf3.number_input("Exponente de transferencia ahuellamiento", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_rut_exp")
+            transfer_sigma = tf4.number_input("σln del modelo de transferencia", min_value=0.0, max_value=1.0, value=float(st.session_state.get('mechanistic_screening',{}).get('response_log_sigma',0.15)), step=0.01, key="transfer_sigma")
+            climate_factor_tf = float(st.session_state.get('climate_material', {}).get('relative_climate_factor', 1.0) or 1.0)
+            transfer_result = {}
+            if transfer_enabled and mech_state:
+                transfer_result = configurable_transfer_damage(
+                    mech_state, esal, climate_factor_tf, float(st.session_state.get('design_reliability',{}).get('reliability_pct',75.0)),
+                    transfer_sigma, transfer_reference_esal, fatigue_exponent, rutting_exponent
+                )
+                st.session_state.transfer_model = transfer_result
+                td1, td2, td3 = st.columns(3)
+                td1.metric("Daño fatiga de diseño", f"{transfer_result['fatigue_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['fatigue_damage_design'] <= 1 else ">1 revisar")
+                td2.metric("Daño ahuellamiento de diseño", f"{transfer_result['rutting_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['rutting_damage_design'] <= 1 else ">1 revisar")
+                td3.metric("Factor climático E*", f"{climate_factor_tf:.3f}")
+                st.warning("Estos índices son configurables y **no se identifican como funciones de transferencia oficiales GDP-2024** hasta introducir y validar una calibración específica.")
+            else:
+                st.session_state.transfer_model = {'enabled': False, 'calibration_status': 'Desactivado / pendiente de calibración'}
+
+            pc1,pc2,pc3,pc4 = st.columns(4)
+            with pc1:
+                perf_years = st.number_input("Horizonte de monitoreo (años)", 1, 40, int(years), key="perf_years")
+            with pc2:
+                drainage_perf = st.number_input("Factor relativo de drenaje", .55, 1.40, float(st.session_state.get("flex_design",{}).get("m2",1.0)), .05, key="perf_drain")
+            with pc3:
+                fatigue_limit = st.number_input("Límite de fatiga (%)", 1.0, 100.0, 20.0, 1.0)
+            with pc4:
+                rut_limit = st.number_input("Límite de ahuellamiento (mm)", 1.0, 40.0, 20.0, 1.0)
+            asphalt_eff = float(selected_row['Carpeta_cm']) if float(selected_row['Carpeta_cm']) > 0 else 2.0
+            perf_df = performance_curves(perf_years, esal, tp_ltpp, cbr_design, asphalt_eff, drainage_perf)
+            st.session_state.performance_df = perf_df
+            last = perf_df.iloc[-1]
+            g1,g2,g3,g4,g5=st.columns(5)
+            g1.metric("Fatiga final",f"{last['Fatiga (%)']:.1f}%", "Cumple" if last['Fatiga (%)']<=fatigue_limit else "Supera límite")
+            g2.metric("Ahuellamiento final",f"{last['Ahuellamiento (mm)']:.1f} mm", "Cumple" if last['Ahuellamiento (mm)']<=rut_limit else "Supera límite")
+            g3.metric("Fisura longitudinal",f"{last['Fisuras longitudinales (%)']:.1f}%")
+            g4.metric("Fisura por bloque",f"{last['Fisuras por bloque (%)']:.1f}%")
+            g5.metric("PCI estimado",f"{last['PCI estimado']:.0f}")
+
+            st.markdown("### Modelo 3D del deterioro del pavimento")
+            st.caption("Visualización didáctica vinculada a las curvas preliminares de desempeño. Las patologías se representan sobre la superficie según el año y severidad seleccionados.")
+            dctrl, dview = st.columns([0.27,0.73], gap="large")
+            with dctrl:
+                year_3d = st.slider("Año a visualizar en 3D", 0, int(perf_years), int(perf_years), 1, key="perf_3d_year")
+                visible_pathologies = st.multiselect(
+                    "Patologías visibles",
+                    ["Fatiga","Ahuellamiento","Fisuras longitudinales","Fisuras por bloque","Fisuración térmica"],
+                    default=["Fatiga","Ahuellamiento","Fisuras longitudinales","Fisuras por bloque"],
+                    key="perf_3d_pathologies"
+                )
+                perf_state = perf_df.loc[perf_df['Año']==year_3d].iloc[0].to_dict()
+                st.metric("PCI en el año seleccionado", f"{perf_state['PCI estimado']:.0f}")
+                st.markdown(
+                    f"""
+                    <div class='panel-card'>
+                      <div class='panel-title'>Severidad visual</div>
+                      <div class='alert-row'>Fatiga: <b>{perf_state['Fatiga (%)']:.1f}%</b> · {pathology_severity(perf_state['Fatiga (%)'],10,20)}</div>
+                      <div class='alert-row'>Ahuellamiento: <b>{perf_state['Ahuellamiento (mm)']:.1f} mm</b> · {pathology_severity(perf_state['Ahuellamiento (mm)'],8,15)}</div>
+                      <div class='alert-row'>Fisuras longitudinales: <b>{perf_state['Fisuras longitudinales (%)']:.1f}%</b> · {pathology_severity(perf_state['Fisuras longitudinales (%)'],10,20)}</div>
+                      <div class='alert-row'>Fisuras por bloque: <b>{perf_state['Fisuras por bloque (%)']:.1f}%</b> · {pathology_severity(perf_state['Fisuras por bloque (%)'],10,20)}</div>
+                    </div>
+                    """, unsafe_allow_html=True
+                )
+                st.info("La representación 3D es cualitativa y escala visualmente la severidad. No equivale a una simulación mecánica ni a una inspección PCI de campo.")
+            with dview:
+                perf_3d = deterioration_3d_figure(selected_row, sclass, cbr_design, perf_state, visible_pathologies)
+                render_rotating_3d(perf_3d, key=f"performance_{year_3d}", height=650, auto_rotate=bool(st.session_state.get("auto_rotate_3d", True)))
+
+            r1,r2=st.columns(2)
+            with r1:
+                st.plotly_chart(performance_plot(perf_df,"Fatiga (%)","Fatiga / área agrietada","Daño acumulado (%)",fatigue_limit,f"Límite {fatigue_limit:.0f}%"),use_container_width=True,config={"displaylogo":False})
+                st.plotly_chart(performance_plot(perf_df,"Fisuras longitudinales (%)","Fisuras longitudinales","Densidad (%)",30.0,"Referencia 30%"),use_container_width=True,config={"displaylogo":False})
+            with r2:
+                st.plotly_chart(performance_plot(perf_df,"Ahuellamiento (mm)","Ahuellamiento total","Deformación (mm)",rut_limit,f"Límite {rut_limit:.0f} mm"),use_container_width=True,config={"displaylogo":False})
+                st.plotly_chart(performance_plot(perf_df,"Fisuras por bloque (%)","Fisuras por bloque","Densidad (%)",30.0,"Referencia 30%"),use_container_width=True,config={"displaylogo":False})
+            pci_fig=go.Figure(go.Scatter(x=perf_df['Año'],y=perf_df['PCI estimado'],mode='lines+markers',line=dict(color='#159947',width=4),marker=dict(size=7)))
+            pci_fig.add_hline(y=70,line_dash='dash',line_color='#f5a000',annotation_text='PCI 70')
+            pci_fig.add_hline(y=55,line_dash='dash',line_color='#ef3340',annotation_text='PCI 55')
+            pci_fig.update_layout(height=320,title='Índice de condición estimado',xaxis_title='Años',yaxis_title='PCI',yaxis_range=[0,100],plot_bgcolor='#f8fbff',paper_bgcolor='white')
+            st.plotly_chart(pci_fig,use_container_width=True,config={"displaylogo":False})
+            if last['Fatiga (%)']>fatigue_limit: st.error("La estimación preliminar supera el límite de fatiga configurado. Revise espesores, módulo de mezcla, tránsito y confiabilidad.")
+            if last['Ahuellamiento (mm)']>rut_limit: st.error("La estimación preliminar supera el límite de ahuellamiento. Revise temperatura, mezcla asfáltica, capas granulares, subrasante y drenaje.")
+            if last['PCI estimado']<70: st.warning("El PCI estimado cae por debajo de 70 durante el horizonte analizado; programe mantenimiento preventivo o rehabilitación.")
+            st.download_button("Descargar curvas de desempeño (CSV)",perf_df.to_csv(index=False).encode('utf-8-sig'),"curvas_desempeno_preliminar.csv","text/csv")
+        else:
+            st.info("Seleccione una estructura para activar el monitoreo de desempeño.")
 
 with pcompare:
     st.subheader("Comparación técnica y económica de alternativas")
@@ -3489,9 +3548,13 @@ with p6:
             "direction_factor": direction_factor,
             "lane_factor": lane_factor,
             "esal": esal,
-            "class": tclass,
-            "design_category": tomo1_category,
-            "design_category_label": f"Categoría {tomo1_category}",
+            "class": tclass if active_tomo == "Tomo I" else "No aplica como categoría normativa Tomo II",
+            "tomo2_tpd_category": classify_tpd(tpd_total) if active_tomo == "Tomo II" else None,
+            "tomo2_heavy_category": classify_heavy_pct(heavy_pct) if active_tomo == "Tomo II" else None,
+            "tomo2_cbr_category": classify_cbr(cbr_design) if active_tomo == "Tomo II" else None,
+            "tomo2_period_years": int(years) if active_tomo == "Tomo II" else None,
+            "design_category": tomo1_category if active_tomo == "Tomo I" else None,
+            "design_category_label": f"Categoría {tomo1_category}" if active_tomo == "Tomo I" else "No aplica",
         },
         "subgrade": {"cbr": cbr_design, "class": sclass, "mr": mr, **st.session_state.get("subgrade_details", {})},
         "geometry": st.session_state.get("project_geometry", {}),
