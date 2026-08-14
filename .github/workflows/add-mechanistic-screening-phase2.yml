@@ -1,0 +1,55 @@
+name: Integrar fase 2 motor mecanístico de cribado
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/add_mechanistic_screening_phase2.py'
+      - '.github/workflows/add-mechanistic-screening-phase2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar fase 2 mecanística
+        run: python tools/add_mechanistic_screening_phase2.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar integración funcional
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('app.py').read_text(encoding='utf-8')
+          required = [
+              'def mechanistic_screening_response',
+              'Respuesta mecanística de cribado — Tomo I',
+              'asphalt_tensile_microstrain_screening',
+              'subgrade_vertical_microstrain_screening',
+              'fatigue_utilization_ratio',
+              'rutting_utilization_ratio',
+              'Respuesta_ME',
+              'Cribado preliminar: no sustituye un solver elástico multicapa',
+          ]
+          for item in required:
+              assert item in text, item
+          print('Fase 2 mecanística integrada y verificada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Integrar motor mecanístico de cribado Tomo I"
+            git push
+          fi
