@@ -1,0 +1,44 @@
+name: Agregar pestaña Mapa Google Earth
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/add_map_google_earth_tab.py'
+      - '.github/workflows/add-map-google-earth-tab.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración
+        run: python tools/add_map_google_earth_tab.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar pestaña y KML
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=['# MAP_GOOGLE_EARTH_TAB','16. Mapa / Google Earth','project_point_kml','Abrir en Google Maps','Descargar punto KML para Google Earth','project_map']
+          for x in required: assert x in t, x
+          print('Pestaña Mapa / Google Earth verificada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Agregar pestaña Mapa y exportación KML"
+            git push
+          fi
