@@ -1,0 +1,52 @@
+name: Mejorar mapa Proyecto punto-tramo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/improve_project_map_scroll_and_geometry_mode.py'
+      - '.github/workflows/improve-project-map-scroll-geometry.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar integración
+        run: python tools/improve_project_map_scroll_and_geometry_mode.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar mapa mejorado
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          required=[
+              '# PROJECT_MAP_GEOMETRY_MODE',
+              '"Punto único", "Tramo (inicio–fin)"',
+              '"scrollZoom": True',
+              'main_project_line',
+              'project_features_kml(project_name, resolved_geo_points, main_project_line)',
+              '"geometry_mode": geometry_mode',
+          ]
+          for x in required:
+              assert x in t, x
+          print('Mapa con scrollZoom y modo punto/tramo verificado.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Mejorar mapa con zoom y modo punto-tramo"
+            git push
+          fi
