@@ -1,0 +1,47 @@
+name: Corregir colisión pvalid en mapa Proyecto
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_project_map_pvalid_collision.py'
+      - '.github/workflows/fix-project-map-pvalid-collision.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar corrección
+        run: python tools/fix_project_map_pvalid_collision.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar reserva de pvalid
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          assert '# FIX_PROJECT_MAP_PVALID_COLLISION' in t
+          assert 'point_is_valid = bool(' in t
+          assert 'with pvalid:' in t
+          for bad in ('pvalid = bool(', 'pvalid = False', '"valid": pvalid'):
+              assert bad not in t, bad
+          print('pvalid reservado correctamente para la pestaña Validación.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Corregir colisión pvalid en mapa de Proyecto"
+            git push
+          fi
