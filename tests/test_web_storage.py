@@ -67,3 +67,12 @@ def test_backend_name_reflects_database_url(monkeypatch):
     assert web_storage.backend_name() == "postgresql"
     monkeypatch.setattr(web_storage, "DATABASE_URL", "")
     assert web_storage.backend_name() == "sqlite"
+
+
+def test_project_fingerprint_is_stable_and_detects_changes():
+    state_a = {"cbr": 5.0, "vehicles": pd.DataFrame([[35, 0.8]], columns=["TPD", "FC"])}
+    state_b = {"vehicles": pd.DataFrame([[35, 0.8]], columns=["TPD", "FC"]), "cbr": 5.0}
+    state_c = {"cbr": 7.0, "vehicles": pd.DataFrame([[35, 0.8]], columns=["TPD", "FC"])}
+
+    assert web_storage.project_state_fingerprint(state_a) == web_storage.project_state_fingerprint(state_b)
+    assert web_storage.project_state_fingerprint(state_a) != web_storage.project_state_fingerprint(state_c)
