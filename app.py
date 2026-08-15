@@ -2541,12 +2541,6 @@ with p2:
             "- El cálculo de ejes equivalentes usa el factor individual de cada fila; no se asigna un factor normativo universal a pickup/carga liviana."
         )
 
-    st.markdown("#### Resumen del conteo ingresado")
-    summary_vehicles = vehicles.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
-        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
-    ]
-    st.dataframe(summary_vehicles, use_container_width=True, hide_index=True)
-
     a, b, c, d = st.columns(4)
     with a:
         if st.session_state.active_tomo == "Tomo II":
