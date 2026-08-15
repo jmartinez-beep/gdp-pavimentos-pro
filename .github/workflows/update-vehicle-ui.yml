@@ -26,6 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Aplicar corrección de interfaz vehicular
+        if: github.event_name == 'push'
         run: python tools/improve_vehicle_inputs.py
       - name: Verificar sintaxis
         run: python -m py_compile app.py
