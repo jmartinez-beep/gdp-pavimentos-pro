@@ -24,16 +24,13 @@ jobs:
           from pathlib import Path
           p = Path('app.py')
           text = p.read_text(encoding='utf-8')
-          block = '''    st.markdown("#### Resumen del conteo ingresado")
-    summary_vehicles = vehicles.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
-        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
-    ]
-    st.dataframe(summary_vehicles, use_container_width=True, hide_index=True)
-
-'''
-          if block not in text:
+          start = text.find('    st.markdown("#### Resumen del conteo ingresado")')
+          end_marker = '    a, b, c, d = st.columns(4)'
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
               raise SystemExit('Expected traffic summary block was not found; app.py left unchanged.')
-          p.write_text(text.replace(block, '', 1), encoding='utf-8')
+          text = text[:start] + text[end:]
+          p.write_text(text, encoding='utf-8')
           PY
       - name: Validate Python syntax
         run: python -m py_compile app.py
