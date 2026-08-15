@@ -1,0 +1,46 @@
+name: Eliminar resumen duplicado de tránsito
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/remove_traffic_summary.py'
+      - '.github/workflows/remove-traffic-summary-main.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar cambio de interfaz
+        run: python tools/remove_traffic_summary.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar eliminación del bloque duplicado
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t = Path('app.py').read_text(encoding='utf-8')
+          assert '#### Resumen del conteo ingresado' not in t
+          assert '¿Cuál es la diferencia entre cantidad diaria y factor camión?' in t
+          assert 'm1.metric("TPD total"' in t
+          assert 'm2.metric("Vehículos pesados"' in t
+          print('Interfaz de tránsito validada.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Eliminar resumen duplicado del conteo de tránsito"
+            git push
+          fi
