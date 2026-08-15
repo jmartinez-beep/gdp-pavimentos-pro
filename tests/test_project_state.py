@@ -23,3 +23,8 @@ def test_autosave_runtime_metadata_is_not_persisted():
     assert is_ephemeral_state_key("_active_project_name")
     assert is_ephemeral_state_key("_autosave_hash")
     assert is_ephemeral_state_key("_autosave_last_at")
+
+
+def test_button_state_is_not_persisted_or_restored():
+    assert is_ephemeral_state_key("run_screening_optimization")
+    assert is_active_control_key("run_screening_optimization")
