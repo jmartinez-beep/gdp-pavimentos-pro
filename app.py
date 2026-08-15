@@ -1267,9 +1267,6 @@ with p2:
     vehicles = pd.DataFrame(vehicle_values, columns=["Categoría", "Factor camión", "TPD"])
     st.session_state.vehicles = vehicles
 
-    st.markdown("#### Resumen del conteo ingresado")
-    st.dataframe(vehicles, use_container_width=True, hide_index=True)
-
     a, b, c, d = st.columns(4)
     with a:
         years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=10)
