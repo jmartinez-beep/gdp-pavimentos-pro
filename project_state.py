@@ -18,6 +18,7 @@ def is_ephemeral_state_key(key: object) -> bool:
     return (
         text in EPHEMERAL_STATE_KEYS
         or text.startswith("FormSubmitter")
+        or text.startswith("download_")
         or text.endswith("_editor")
         or text.startswith("climate_monthly_editor_")
     )
@@ -26,4 +27,4 @@ def is_ephemeral_state_key(key: object) -> bool:
 def is_active_control_key(key: object) -> bool:
     """Keys already instantiated above the project loader and unsafe to delete mid-run."""
     text = str(key)
-    return text in EPHEMERAL_STATE_KEYS or text.startswith("FormSubmitter")
+    return (\n        text in EPHEMERAL_STATE_KEYS\n        or text.startswith("FormSubmitter")\n        or text.startswith("download_")\n    )
