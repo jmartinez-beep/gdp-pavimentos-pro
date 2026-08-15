@@ -4,13 +4,6 @@ on:
   push:
     branches:
       - agent/checklist-cr2010-asfaltos
-  pull_request:
-    paths:
-      - 'app.py'
-      - 'cr2010_asphalt.py'
-      - 'tools/integrate_cr2010_asphalt.py'
-      - '.github/workflows/integrate-cr2010-asphalt.yml'
-
 permissions:
   contents: write
 
