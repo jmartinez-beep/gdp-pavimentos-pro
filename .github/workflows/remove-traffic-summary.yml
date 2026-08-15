@@ -1,0 +1,48 @@
+name: Remove duplicated traffic summary
+
+on:
+  push:
+    branches:
+      - agent/tomo2-gdp-2024-trazabilidad
+    paths:
+      - .github/workflows/remove-traffic-summary.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tomo2-gdp-2024-trazabilidad
+      - name: Remove duplicated traffic summary
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app.py')
+          text = p.read_text(encoding='utf-8')
+          block = '''    st.markdown("#### Resumen del conteo ingresado")
+    summary_vehicles = vehicles.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
+        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
+    ]
+    st.dataframe(summary_vehicles, use_container_width=True, hide_index=True)
+
+'''
+          if block not in text:
+              raise SystemExit('Expected traffic summary block was not found; app.py left unchanged.')
+          p.write_text(text.replace(block, '', 1), encoding='utf-8')
+          PY
+      - name: Validate Python syntax
+        run: python -m py_compile app.py
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          git diff --cached --quiet && exit 0
+          git commit -m "Remove duplicated traffic count summary"
+          git push origin HEAD:agent/tomo2-gdp-2024-trazabilidad
