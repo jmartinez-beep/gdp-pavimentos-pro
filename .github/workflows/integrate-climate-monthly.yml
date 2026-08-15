@@ -29,6 +29,7 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
       - name: Aplicar integración climática
+        if: github.event_name == 'push'
         run: python tools/integrate_climate_monthly.py
       - name: Verificar sintaxis
         run: python -m py_compile app.py climate_tools.py
