@@ -17,6 +17,7 @@ from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
+from road_alignment import RoadAlignmentError, road_route
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -324,6 +325,12 @@ def _interpolate_wgs84(start_lon: float, start_lat: float, end_lon: float, end_l
     r = max(0.0, min(1.0, float(ratio)))
     return (float(start_lon) + (float(end_lon)-float(start_lon))*r,
             float(start_lat) + (float(end_lat)-float(start_lat))*r)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_road_route(waypoints: tuple[tuple[float, float], ...]):
+    """Cache road matching so Streamlit reruns do not repeat external requests."""
+    return road_route(waypoints)
 
 
 # CLIMATE_GRANULAR_MASTER_CURVE_PHASE
@@ -2247,6 +2254,7 @@ with p1:
     ) or "Punto único"
 
     main_project_line = []
+    alignment_mode = "Línea directa"
     if geometry_mode == "Punto único":
         base_geo_points = pd.DataFrame([{
             "Nombre": "Punto principal",
@@ -2281,6 +2289,18 @@ with p1:
             end_n = sg4.number_input("Norte final CRTM05", value=float(st.session_state.get("project_segment_end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
             start_lon, start_lat = crtm05_to_wgs84(start_e, start_n)
             end_lon, end_lat = crtm05_to_wgs84(end_e, end_n)
+
+        alignment_mode = st.radio(
+            "Trazado del eje",
+            ["Ajustar a carretera (automático)", "Puntos manuales", "Línea directa"],
+            horizontal=True,
+            key="project_road_alignment_mode",
+            help="El ajuste automático consulta la red vial de OpenStreetMap. Los vértices manuales sirven como puntos de paso y como alternativa sin conexión.",
+        )
+        st.caption(
+            "Para guiar el recorrido por una carretera específica, agregue filas de tipo "
+            "**Vértice de eje** en el orden de avance entre el inicio y el fin."
+        )
 
         base_geo_points = pd.DataFrame([
             {"Nombre":"Inicio del tramo","Tipo":"Inicio","Sistema":"WGS84","Este_CRTM05":float(start_e),"Norte_CRTM05":float(start_n),"Latitud":float(start_lat),"Longitud":float(start_lon),"Descripción":str(location)},
@@ -2318,7 +2338,7 @@ with p1:
             key="project_geo_points_editor",
             column_config={
                 "Nombre": st.column_config.TextColumn("Nombre / código"),
-                "Tipo": st.column_config.SelectboxColumn("Tipo", options=["Proyecto", "Inicio", "Fin", "Sondeo P1", "Sondeo P2", "Sondeo", "Puente", "Alcantarilla", "Intersección", "Acceso", "Otro"]),
+                "Tipo": st.column_config.SelectboxColumn("Tipo", options=["Proyecto", "Inicio", "Vértice de eje", "Fin", "Sondeo P1", "Sondeo P2", "Sondeo", "Puente", "Alcantarilla", "Intersección", "Acceso", "Otro"]),
                 "Sistema": st.column_config.SelectboxColumn("Sistema", options=["WGS84", "CRTM05"]),
                 "Este_CRTM05": st.column_config.NumberColumn("Este CRTM05", format="%.3f"),
                 "Norte_CRTM05": st.column_config.NumberColumn("Norte CRTM05", format="%.3f"),
@@ -2356,6 +2376,36 @@ with p1:
         })
 
     valid_geo_points = [p for p in resolved_geo_points if p["valid"]]
+    if geometry_mode == "Tramo (inicio–fin)" and main_project_line:
+        manual_vertices = [
+            (p["longitude"], p["latitude"])
+            for p in valid_geo_points if p["type"] == "Vértice de eje"
+        ]
+        waypoints = [(float(start_lon), float(start_lat)), *manual_vertices, (float(end_lon), float(end_lat))]
+        if alignment_mode == "Ajustar a carretera (automático)":
+            try:
+                aligned_route = cached_road_route(tuple(waypoints))
+                main_project_line = [{
+                    "name": "Tramo ajustado a carretera",
+                    "description": f"Ruta vial OpenStreetMap/OSRM · {aligned_route.distance_m:,.1f} m",
+                    "coordinates": list(aligned_route.coordinates),
+                }]
+                st.success(
+                    f"Eje ajustado a la red vial: {aligned_route.distance_m:,.1f} m "
+                    f"y {len(aligned_route.coordinates)} vértices."
+                )
+            except (RoadAlignmentError, ValueError) as exc:
+                main_project_line[0]["coordinates"] = waypoints
+                st.warning(
+                    f"No fue posible ajustar automáticamente el eje ({exc}). "
+                    "Se muestra la polilínea definida por los puntos manuales."
+                )
+        elif alignment_mode == "Puntos manuales":
+            main_project_line[0]["name"] = "Tramo por puntos manuales"
+            main_project_line[0]["coordinates"] = waypoints
+            if not manual_vertices:
+                st.info("Agregue puntos de tipo “Vértice de eje” para seguir las curvas de la carretera.")
+
     fig_project_map = go.Figure()
     type_symbols = {
         "Proyecto": "circle", "Inicio": "triangle", "Fin": "triangle",
@@ -2384,13 +2434,13 @@ with p1:
     if geometry_mode == "Tramo (inicio–fin)" and main_project_line:
         line_coords = main_project_line[0]["coordinates"]
         fig_project_map.add_trace(go.Scattermapbox(
-            lat=[line_coords[0][1], line_coords[1][1]],
-            lon=[line_coords[0][0], line_coords[1][0]],
-            mode="lines", name="Tramo principal", line=dict(width=6),
-            hovertemplate="<b>Tramo principal</b><extra></extra>",
+            lat=[point[1] for point in line_coords],
+            lon=[point[0] for point in line_coords],
+            mode="lines", name=main_project_line[0]["name"], line=dict(width=6, color="#ff7f9b"),
+            hovertemplate=f"<b>{main_project_line[0]['name']}</b><extra></extra>",
         ))
-        center_lat = (line_coords[0][1] + line_coords[1][1]) / 2
-        center_lon = (line_coords[0][0] + line_coords[1][0]) / 2
+        center_lat = sum(point[1] for point in line_coords) / len(line_coords)
+        center_lon = sum(point[0] for point in line_coords) / len(line_coords)
     fig_project_map.update_layout(
         mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=14),
         height=500, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h"),
@@ -2431,7 +2481,8 @@ with p1:
         "latitude": float(latitude), "longitude": float(longitude),
         "crtm_easting": float(crtm_easting), "crtm_northing": float(crtm_northing),
         "google_maps_url": google_maps_url, "kml_filename": f"{safe_project_name}_ubicacion.kml",
-        "geometry_mode": geometry_mode, "points": resolved_geo_points, "lines": main_project_line,
+        "geometry_mode": geometry_mode, "alignment_mode": alignment_mode,
+        "points": resolved_geo_points, "lines": main_project_line,
     }
     st.caption("Las coordenadas y los puntos adicionales quedan incluidos en el estado guardado del proyecto y en las exportaciones. El mapa es una referencia geográfica; no sustituye levantamiento topográfico ni alineamiento GIS definitivo.")
 
