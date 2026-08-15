@@ -181,6 +181,12 @@ def save_project(user_id: int, name: str, state: dict[str, Any]) -> None:
         )
 
 
+def project_state_fingerprint(state: dict[str, Any]) -> str:
+    """Stable digest used to avoid writing an unchanged project repeatedly."""
+    payload = json.dumps(serialize_value(state), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def list_projects(user_id: int) -> list[dict[str, Any]]:
     with _connect() as con:
         rows = con.execute(

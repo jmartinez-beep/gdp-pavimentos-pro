@@ -5,12 +5,15 @@ import json
 import math
 import zipfile
 from dataclasses import dataclass, asdict
-from datetime import date
+from datetime import date, datetime
 from statistics import NormalDist
 from typing import Dict, List
 import os
 
-from web_storage import (authenticate, create_user, delete_project, list_projects, load_project, save_project)
+from web_storage import (
+    authenticate, create_user, delete_project, list_projects, load_project,
+    project_state_fingerprint, save_project,
+)
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
@@ -2038,7 +2041,12 @@ with st.sidebar:
     if int(user.get("id",0)) > 0:
         if st.button("💾 Guardar / actualizar proyecto", use_container_width=True):
             if project_name_web.strip():
-                save_project(int(user["id"]), project_name_web.strip(), _capture_session_state())
+                state_to_save = _capture_session_state()
+                save_project(int(user["id"]), project_name_web.strip(), state_to_save)
+                st.session_state._active_project_name = project_name_web.strip()
+                st.session_state._autosave_hash = project_state_fingerprint(state_to_save)
+                st.session_state._autosave_last_at = datetime.now().strftime("%H:%M:%S")
+                st.session_state._autosave_status = "saved"
                 st.success("Proyecto guardado.")
                 st.rerun()
             else:
@@ -2053,11 +2061,17 @@ with st.sidebar:
                     saved = load_project(int(user["id"]), int(pinfo["id"]))
                     if saved is not None:
                         _restore_session_state(saved)
+                        st.session_state._active_project_name = pinfo["name"]
+                        st.session_state._autosave_hash = project_state_fingerprint(saved)
+                        st.session_state._autosave_status = "saved"
                         st.session_state._loaded_project_notice = pinfo["name"]
                         st.rerun()
             with cdel:
                 if st.button("🗑️ Eliminar", use_container_width=True):
                     delete_project(int(user["id"]), int(pinfo["id"]))
+                    if st.session_state.get("_active_project_name") == pinfo["name"]:
+                        st.session_state.pop("_active_project_name", None)
+                        st.session_state.pop("_autosave_hash", None)
                     st.rerun()
         else:
             st.caption("Aún no hay proyectos guardados.")
@@ -2092,6 +2106,15 @@ if int(user.get("id", 0)) > 0:
             f"Sesión iniciada como **{user.get('display_name', user.get('username', 'Usuario'))}**. "
             "Desde este panel puede guardar, buscar y abrir sus proyectos sin usar la barra lateral."
         )
+        active_autosave_name = st.session_state.get("_active_project_name")
+        if active_autosave_name:
+            last_autosave = st.session_state.get("_autosave_last_at", "esta sesión")
+            if st.session_state.get("_autosave_status") == "error":
+                st.error(f"Guardado automático pendiente para **{active_autosave_name}**.")
+            else:
+                st.caption(f"☁️ Guardado automático activo: **{active_autosave_name}** · último guardado {last_autosave}")
+        else:
+            st.caption("El guardado automático se activará después del primer guardado manual o al abrir un proyecto.")
     with save_name_col:
         project_name_main = st.text_input(
             "Nombre para guardar",
@@ -2102,7 +2125,12 @@ if int(user.get("id", 0)) > 0:
         st.write("")
         if st.button("💾 Guardar proyecto ahora", use_container_width=True, key="main_save_project"):
             if project_name_main.strip():
-                save_project(int(user["id"]), project_name_main.strip(), _capture_session_state())
+                state_to_save = _capture_session_state()
+                save_project(int(user["id"]), project_name_main.strip(), state_to_save)
+                st.session_state._active_project_name = project_name_main.strip()
+                st.session_state._autosave_hash = project_state_fingerprint(state_to_save)
+                st.session_state._autosave_last_at = datetime.now().strftime("%H:%M:%S")
+                st.session_state._autosave_status = "saved"
                 st.success("Proyecto guardado correctamente.")
                 st.rerun()
             else:
@@ -2143,6 +2171,9 @@ if int(user.get("id", 0)) > 0:
                     saved = load_project(int(user["id"]), int(selected_project["id"]))
                     if saved is not None:
                         _restore_session_state(saved)
+                        st.session_state._active_project_name = selected_project["name"]
+                        st.session_state._autosave_hash = project_state_fingerprint(saved)
+                        st.session_state._autosave_status = "saved"
                         st.session_state._loaded_project_notice = selected_project["name"]
                         st.rerun()
                     else:
@@ -2160,6 +2191,9 @@ if int(user.get("id", 0)) > 0:
                     key="main_delete_project",
                 ):
                     delete_project(int(user["id"]), int(selected_project["id"]))
+                    if st.session_state.get("_active_project_name") == selected_project["name"]:
+                        st.session_state.pop("_active_project_name", None)
+                        st.session_state.pop("_autosave_hash", None)
                     st.success(f"Proyecto “{selected_project['name']}” eliminado.")
                     st.rerun()
         else:
@@ -4336,3 +4370,23 @@ with pdash:
         st.markdown("<div class='dark-note'>Los gráficos de deterioro son estimaciones preliminares y no sustituyen la verificación mecanístico-empírica detallada del Tomo I.</div>",unsafe_allow_html=True)
     else:
         st.info("Complete el módulo de Estructura para activar el Dashboard profesional.")
+
+
+# Guardado automático al terminar una ejecución completa. Streamlit vuelve a ejecutar el
+# script después de cada interacción confirmada; el hash evita escrituras si nada cambió.
+autosave_user_id = int(user.get("id", 0))
+autosave_project_name = str(st.session_state.get("_active_project_name", "")).strip()
+if autosave_user_id > 0 and autosave_project_name:
+    autosave_state = _capture_session_state()
+    autosave_hash = project_state_fingerprint(autosave_state)
+    if autosave_hash != st.session_state.get("_autosave_hash"):
+        try:
+            save_project(autosave_user_id, autosave_project_name, autosave_state)
+        except Exception as exc:
+            st.session_state._autosave_status = "error"
+            st.session_state._autosave_error = str(exc)
+        else:
+            st.session_state._autosave_hash = autosave_hash
+            st.session_state._autosave_last_at = datetime.now().strftime("%H:%M:%S")
+            st.session_state._autosave_status = "saved"
+            st.session_state.pop("_autosave_error", None)
