@@ -15,6 +15,7 @@ from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
+from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 from road_alignment import RoadAlignmentError, road_route
@@ -1744,11 +1745,25 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 
 
 
-CLIMATE_STATIONS_TOMO_II = [
-    "Upala", "Los Chiles", "San Carlos", "Liberia", "Nicoya", "Puntarenas",
-    "San José", "Alajuela", "Barva de Heredia", "Cartago", "Buenos Aires",
-    "Aguirre", "Golfito", "Limón", "Orotina"
-]
+CLIMATE_STATIONS_TOMO_II = list(CLIMATE_ZONES)
+
+
+def load_climate_zone_to_state() -> None:
+    zone = st.session_state.get("climate_station_selected", "San José")
+    if zone == "Otra / dato propio":
+        st.session_state.climate_catalog_status = "manual"
+        return
+    try:
+        catalog = fetch_zone_climatology(zone)
+    except Exception as exc:
+        st.session_state.climate_catalog_status = "error"
+        st.session_state.climate_catalog_error = str(exc)
+        return
+    st.session_state.climate_catalog = catalog
+    st.session_state.climate_catalog_status = "loaded"
+    st.session_state.climate_source_input = catalog["source"]
+    st.session_state.climate_period_input = catalog["period"]
+    st.session_state.climate_air_temp_c = float(catalog["annual_c"])
 
 def pavement_temperature_ltpp(air_c: float, latitude: float, depth_mm: float) -> float:
     """GDP Tomo I, Ec. 303-03 (modelo LTPP)."""
@@ -2827,11 +2842,28 @@ with pclima:
         key="climate_input_mode",
     ) or "Estación documentada"
 
+    if "climate_station_selected" not in st.session_state:
+        st.session_state.climate_station_selected = "San José"
+        load_climate_zone_to_state()
+
     c1, c2, c3 = st.columns(3)
     with c1:
-        climate_source = st.text_input("Fuente / institución", value="IMN / fuente documentada")
-        climate_period = st.text_input("Periodo documentado", value="")
-        station_selected = st.selectbox("Estación o zona representativa", CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"], index=6)
+        station_selected = st.selectbox(
+            "Estación o zona representativa",
+            CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"],
+            key="climate_station_selected",
+            on_change=load_climate_zone_to_state,
+        )
+        climate_source = st.text_input(
+            "Fuente / institución",
+            value=st.session_state.get("climate_source_input", "Fuente documentada por el usuario"),
+            key="climate_source_input",
+        )
+        climate_period = st.text_input(
+            "Periodo documentado",
+            value=st.session_state.get("climate_period_input", ""),
+            key="climate_period_input",
+        )
     with c2:
         depth_mm = st.number_input("Profundidad de evaluación en la mezcla (mm)", min_value=1.0, max_value=500.0, value=35.0, step=1.0, help="Se recomienda evaluar aproximadamente a la profundidad media de la capa asfáltica.")
         analysis_category = tomo1_design_category(esal)
@@ -2850,16 +2882,31 @@ with pclima:
 
     climate_monthly_df = pd.DataFrame()
     monthly_values = []
+    catalog = st.session_state.get("climate_catalog", {})
+    catalog_matches_zone = catalog.get("zone") == station_selected
+    if st.session_state.get("climate_catalog_status") == "error":
+        st.warning(
+            "No fue posible consultar NASA POWER. Puede continuar con datos propios. "
+            f"Detalle: {st.session_state.get('climate_catalog_error', 'sin respuesta')}"
+        )
+    elif station_selected == "Otra / dato propio":
+        st.info("Modo de dato propio: complete manualmente la fuente, el periodo y las temperaturas.")
+    elif catalog_matches_zone:
+        st.success(
+            f"Climatología cargada automáticamente para {station_selected}: "
+            f"{catalog['latitude']:.3f}, {catalog['longitude']:.3f}."
+        )
+
     if climate_input_mode == "Valores mensuales":
         st.markdown("#### Temperaturas medias mensuales del aire")
-        default_monthly = [23.0, 23.5, 24.0, 24.5, 24.0, 23.5, 23.5, 23.5, 23.5, 23.0, 22.8, 22.8]
+        default_monthly = catalog.get("monthly_c", [23.0, 23.5, 24.0, 24.5, 24.0, 23.5, 23.5, 23.5, 23.5, 23.0, 22.8, 22.8])
         monthly_input = pd.DataFrame({"Mes": MONTHS_ES, "Temperatura media del aire (°C)": default_monthly})
         monthly_editor = st.data_editor(
             monthly_input,
             use_container_width=True,
             hide_index=True,
             num_rows="fixed",
-            key="climate_monthly_editor",
+            key=f"climate_monthly_editor_{station_selected}",
             column_config={
                 "Mes": st.column_config.TextColumn("Mes", disabled=True),
                 "Temperatura media del aire (°C)": st.column_config.NumberColumn(
@@ -2869,6 +2916,15 @@ with pclima:
         )
         monthly_values = pd.to_numeric(monthly_editor["Temperatura media del aire (°C)"], errors="coerce").fillna(0.0).tolist()
         air_temp_c = representative_temperature(monthly_values)
+        monthly_modified = catalog_matches_zone and any(
+            abs(current - original) > 0.049
+            for current, original in zip(monthly_values, catalog.get("monthly_c", []))
+        )
+        st.caption(
+            "Origen: valores modificados por el usuario."
+            if monthly_modified else
+            "Origen: climatología automática NASA POWER; la tabla permanece editable."
+        )
         climate_monthly_df = monthly_climate_table(monthly_values, latitude, depth_mm, pavement_temperature_ltpp, pavement_temperature_shrp)
         summary = monthly_summary(climate_monthly_df)
         st.dataframe(climate_monthly_df, use_container_width=True, hide_index=True)
@@ -2879,8 +2935,19 @@ with pclima:
         s3.metric("Aire máximo mensual", f"{summary['air_max_c']:.1f} °C")
         s4.metric("Rango mensual", f"{summary['air_max_c']-summary['air_min_c']:.1f} °C")
     else:
-        air_temp_c = st.number_input("Temperatura representativa del aire (°C)", min_value=-10.0, max_value=50.0, value=24.0, step=0.1)
-        st.info("Modo estación: documente la estación, institución y periodo. El valor representativo ingresado se usa directamente en las ecuaciones térmicas.")
+        air_temp_c = st.number_input(
+            "Temperatura representativa del aire (°C)",
+            min_value=-10.0,
+            max_value=50.0,
+            value=float(st.session_state.get("climate_air_temp_c", 24.0)),
+            step=0.1,
+            key="climate_air_temp_c",
+        )
+        air_modified = catalog_matches_zone and abs(air_temp_c - float(catalog.get("annual_c", air_temp_c))) > 0.049
+        st.info(
+            "Modo estación/zona: la temperatura media se cargó del catálogo y puede editarse. "
+            + ("El valor actual fue modificado por el usuario." if air_modified else "El valor actual coincide con el catálogo.")
+        )
 
     tp_ltpp = pavement_temperature_ltpp(air_temp_c, latitude, depth_mm)
     tp_shrp = pavement_temperature_shrp(air_temp_c, latitude, depth_mm)
@@ -4065,6 +4132,9 @@ with p6:
             "source": climate_source,
             "period": climate_period,
             "station": station_selected,
+            "catalog_origin": "automatic" if catalog_matches_zone else "manual",
+            "catalog_latitude": catalog.get("latitude") if catalog_matches_zone else None,
+            "catalog_longitude": catalog.get("longitude") if catalog_matches_zone else None,
             "notes": climate_notes,
             "air_c": air_temp_c,
             "pavement_ltpp_c": tp_ltpp,
