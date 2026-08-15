@@ -19,6 +19,7 @@ from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 from road_alignment import RoadAlignmentError, road_route
+from project_state import is_active_control_key, is_ephemeral_state_key
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1940,17 +1941,10 @@ AUTH_REQUIRED = os.getenv("GDP_AUTH_REQUIRED", "1").strip().lower() not in {"0",
 ALLOW_REGISTRATION = os.getenv("GDP_ALLOW_REGISTRATION", "1").strip().lower() not in {"0", "false", "no"}
 PILOT_MODE = os.getenv("GDP_PILOT_MODE", "1").strip().lower() not in {"0", "false", "no"}
 
-WEB_STATE_EXCLUDE = {
-    "auth_user", "auth_view", "login_user", "login_password", "reg_user", "reg_name", "reg_password",
-    "project_save_name", "project_pick", "confirm_delete_project", "_loaded_project_notice",
-    "main_project_save_name", "main_project_search", "main_project_pick", "main_confirm_delete_project",
-    "main_save_project", "main_open_project", "main_delete_project"
-}
-
 def _capture_session_state():
     state = {}
     for key, value in st.session_state.items():
-        if key in WEB_STATE_EXCLUDE or key.startswith("FormSubmitter"):
+        if is_ephemeral_state_key(key):
             continue
         # UploadedFile y objetos efímeros no deben persistirse.
         if value.__class__.__name__ in {"UploadedFile", "UploadedFileRec"}:
@@ -1964,13 +1958,14 @@ def _restore_session_state(saved):
         return
     auth_user = st.session_state.get("auth_user")
     for key in list(st.session_state.keys()):
-        if key not in WEB_STATE_EXCLUDE and key != "auth_user":
+        if not is_active_control_key(key) and key != "auth_user":
             try:
                 del st.session_state[key]
             except Exception:
                 pass
     for key, value in saved.items():
-        if key not in WEB_STATE_EXCLUDE:
+        # También filtra claves heredadas de proyectos guardados antes de esta corrección.
+        if not is_ephemeral_state_key(key):
             st.session_state[key] = value
     if auth_user:
         st.session_state.auth_user = auth_user
