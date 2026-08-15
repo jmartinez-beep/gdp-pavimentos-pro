@@ -1,0 +1,47 @@
+name: Corregir SN base estabilizada
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_stabilized_base_sn.py'
+      - '.github/workflows/fix-stabilized-base-sn.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar corrección
+        run: python tools/fix_stabilized_base_sn.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar separación de capas
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path('app.py').read_text(encoding='utf-8')
+          assert 'Coeficiente estructural base estabilizada aBE' in t
+          assert 'SN base estabilizada' in t
+          assert 'D2_stabilized_in' in t
+          assert 'SN_base_stabilized_contribution' in t
+          assert 'sn_be = a_be * m_be * d_be' in t
+          print('Base estabilizada separada de la base granular en el cálculo SN.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Separar aporte SN de base estabilizada"
+            git push
+          fi
