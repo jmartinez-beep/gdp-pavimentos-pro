@@ -16,6 +16,7 @@ from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
 from cr2020_asphalt import render_asphalt_cr2020_checklist
+from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1619,7 +1620,7 @@ def make_report(payload: Dict) -> str:
           <tr><th>Superficie</th><td>{selected['Superficie']}</td></tr>
           <tr><th>Carpeta</th><td>{selected['Carpeta_cm']} cm</td></tr>
           <tr><th>Base</th><td>{selected['Base_cm']} cm</td></tr>
-          <tr><th>Subbase</th><td>{selected['Subbase_cm']} cm</td></tr>
+          <tr><th>Subbase Granular</th><td>{selected['Subbase_cm']} cm</td></tr>
         </table>
         """
 
@@ -3244,7 +3245,7 @@ with pflex:
                 ["Carpeta (cm)", selected_row.get("Carpeta_cm", 0)],
                 ["Base granular (cm)", selected_row.get("Base_granular_cm", 0)],
                 ["Base estabilizada (cm)", selected_row.get("Base_estabilizada_cm", 0)],
-                ["Subbase (cm)", selected_row.get("Subbase_cm", 0)],
+                ["Subbase Granular (cm)", selected_row.get("Subbase_cm", 0)],
                 ["Tabla de asignación", selected_row.get("Tabla_asignacion", "")],
             ], columns=["Elemento", "Valor"])
             st.dataframe(t2sum, use_container_width=True, hide_index=True)
@@ -3293,21 +3294,21 @@ with pflex:
             st.markdown("#### Diseño preliminar AASHTO 93 — SN requerido y aportado")
             st.caption("Este bloque es una comprobación preliminar AASHTO-93 y se mantiene separado del diseño mecanístico-empírico GDP-2024 Tomo I.")
             f1,f2,f3,f4 = st.columns(4)
-            a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.01, max_value=1.0, value=0.44, step=0.01, key="aashto_a1")
-            a2 = f2.number_input("Coeficiente estructural base granular a2", min_value=0.01, max_value=1.0, value=0.14, step=0.01, key="aashto_a2")
+            a1 = f1.number_input("Coeficiente estructural carpeta a1", min_value=0.01, max_value=1.0, value=DEFAULT_LAYER_COEFFICIENTS["asphalt"], step=0.01, key="aashto_a1")
+            a2 = f2.number_input("Coeficiente estructural base granular a2", min_value=0.01, max_value=1.0, value=DEFAULT_LAYER_COEFFICIENTS["granular_base"], step=0.01, key="aashto_a2")
             a_be = f3.number_input(
                 "Coeficiente estructural base estabilizada aBE",
-                min_value=0.01, max_value=1.0, value=0.20, step=0.01, key="aashto_a_be",
+                min_value=0.01, max_value=1.0, value=DEFAULT_LAYER_COEFFICIENTS["stabilized_base"], step=0.01, key="aashto_a_be",
                 help="Coeficiente independiente para la base estabilizada. El valor 0.20 es preliminar y debe sustituirse por el valor documentado/calibrado del proyecto cuando esté disponible."
             )
-            a3 = f4.number_input("Coeficiente estructural subbase a3", min_value=0.01, max_value=1.0, value=0.11, step=0.01, key="aashto_a3")
+            a3 = f4.number_input("Coeficiente estructural subbase granular a3", min_value=0.01, max_value=1.0, value=DEFAULT_LAYER_COEFFICIENTS["granular_subbase"], step=0.01, key="aashto_a3")
             g1,g2,g3 = st.columns(3)
             m2 = g1.number_input("Coeficiente drenaje base granular m2", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m2")
             m_be = g2.number_input(
                 "Factor de ajuste base estabilizada mBE", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m_be",
                 help="Factor de ajuste separado para la base estabilizada; no se interpreta automáticamente como coeficiente de drenaje de una capa granular."
             )
-            m3 = g3.number_input("Coeficiente drenaje subbase m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m3")
+            m3 = g3.number_input("Coeficiente drenaje subbase granular m3", min_value=0.4, max_value=1.4, value=1.00, step=0.05, key="aashto_m3")
 
             d1 = float(selected_row.get('Carpeta_cm', 0.0) or 0.0) / 2.54
             d_bg = float(selected_row.get('Base_granular_cm', 0.0) or 0.0) / 2.54
@@ -3316,11 +3317,17 @@ with pflex:
                 d_bg = float(selected_row.get('Base_cm', 0.0) or 0.0) / 2.54
             d3 = float(selected_row.get('Subbase_cm', 0.0) or 0.0) / 2.54
 
-            sn1 = a1 * d1
-            sn_bg = a2 * m2 * d_bg
-            sn_be = a_be * m_be * d_be
-            sn3 = a3 * m3 * d3
-            sn_total = sn1 + sn_bg + sn_be + sn3
+            sn_breakdown = structural_number_breakdown(
+                asphalt_in=d1, granular_base_in=d_bg, stabilized_base_in=d_be,
+                granular_subbase_in=d3, a1=a1, a_granular_base=a2,
+                a_stabilized_base=a_be, a_granular_subbase=a3,
+                m_granular_base=m2, m_stabilized_base=m_be, m_granular_subbase=m3,
+            )
+            sn1 = sn_breakdown["asphalt"]
+            sn_bg = sn_breakdown["granular_base"]
+            sn_be = sn_breakdown["stabilized_base"]
+            sn3 = sn_breakdown["granular_subbase"]
+            sn_total = sn_breakdown["total"]
             sn_cum1 = sn1
             sn_cum_bg = sn1 + sn_bg
             sn_cum_be = sn1 + sn_bg + sn_be
@@ -3357,6 +3364,7 @@ with pflex:
             st.latex(r"\log_{10}(W_{18})=Z_RS_0+9.36\log_{10}(SN+1)-0.20+\frac{\log_{10}(\Delta PSI/2.7)}{0.40+1094/(SN+1)^{5.19}}+2.32\log_{10}(M_R)-8.07")
             st.caption(f"Sustitución: W18={esal:,.0f}; R={reliability_pct:.1f}%; ZR={aashto_result['zr']:.3f}; S0={overall_standard_error:.2f}; ΔPSI={aashto_result['delta_psi']:.2f}; Mr={mr:.2f} MPa ({aashto_result['mr_psi']:,.0f} psi).")
 
+            st.markdown("##### Desglose del Número Estructural")
             layer_rows = [
                 ['Carpeta asfáltica','D1',d1,d1*2.54,'a1',a1,1.0,sn1,sn_cum1],
             ]
@@ -3364,7 +3372,7 @@ with pflex:
                 layer_rows.append(['Base granular','DBG',d_bg,d_bg*2.54,'a2',a2,m2,sn_bg,sn_cum_bg])
             if d_be > 0:
                 layer_rows.append(['Base estabilizada','DBE',d_be,d_be*2.54,'aBE',a_be,m_be,sn_be,sn_cum_be])
-            layer_rows.append(['Subbase','D3',d3,d3*2.54,'a3',a3,m3,sn3,sn_cum3])
+            layer_rows.append(['Subbase granular','D3',d3,d3*2.54,'a3',a3,m3,sn3,sn_cum3])
             layer_table = pd.DataFrame(layer_rows, columns=['Capa','Espesor','D (in)','D (cm)','Coeficiente','aᵢ','mᵢ','Aporte SN','SN acumulado'])
             st.dataframe(layer_table, use_container_width=True, hide_index=True)
             st.latex(r"SN=a_1D_1+a_{BG}m_{BG}D_{BG}+a_{BE}m_{BE}D_{BE}+a_3m_3D_3")
@@ -3373,7 +3381,7 @@ with pflex:
                 st.write(f"**SN base granular = {a2:.3f}×{m2:.3f}×{d_bg:.3f} = {sn_bg:.3f}**")
             if d_be > 0:
                 st.write(f"**SN base estabilizada = {a_be:.3f}×{m_be:.3f}×{d_be:.3f} = {sn_be:.3f}**")
-            st.write(f"**SN subbase = {a3:.3f}×{m3:.3f}×{d3:.3f} = {sn3:.3f}**")
+            st.write(f"**SN subbase granular = {a3:.3f}×{m3:.3f}×{d3:.3f} = {sn3:.3f}**")
 
             st.markdown("##### Despeje teórico de espesores por SN residual")
             st.latex(r"D_2=\frac{SN_{req}-a_1D_1}{a_2m_2}")
@@ -3972,7 +3980,7 @@ with p6:
     st.markdown("#### Registro de cálculo auditable")
     audit_rows = [
         {'Etapa':'Tránsito','Ecuación / método':'EEq = 365·Σ(TPDᵢ·FCᵢ)·FD·FCarril·G','Resultado':f"{esal:,.0f} ESAL",'Estado':'Calculado'},
-        {'Etapa':'AASHTO-93','Ecuación / método':'SN = a1D1 + a2m2D2 + a3m3D3','Resultado':f"SN={float(st.session_state.get('flex_design',{}).get('sn',0)):.2f}",'Estado':'Preliminar'},
+        {'Etapa':'AASHTO-93','Ecuación / método':'SN = a1D1 + aBG·mBG·DBG + aBE·mBE·DBE + a3·m3·D3','Resultado':f"SN={float(st.session_state.get('flex_design',{}).get('sn',0)):.2f}",'Estado':'Preliminar'},
         {'Etapa':'Granulares','Ecuación / método':'Mr=k1·Pa·(θ/Pa)^k2·(τoct/Pa+1)^k3','Resultado':f"Mr={float(payload.get('materials',{}).get('granular_model',{}).get('mr_calculated_mpa',0)):.1f} MPa",'Estado':'Configurable/documentado'},
         {'Etapa':'Clima / mezcla','Ecuación / método':'WLF + curva maestra E*','Resultado':f"E*={float(payload.get('climate_material',{}).get('effective_modulus_mpa',0)):.0f} MPa",'Estado':'Según parámetros documentados'},
         {'Etapa':'Respuesta estructural','Ecuación / método':str(payload.get('mechanistic_screening',{}).get('method','No ejecutado')),'Resultado':f"Umax={max(float(payload.get('mechanistic_screening',{}).get('fatigue_utilization_design',0) or 0),float(payload.get('mechanistic_screening',{}).get('rutting_utilization_design',0) or 0)):.2f}",'Estado':'Cribado'},
@@ -4145,5 +4153,3 @@ with pdash:
         st.markdown("<div class='dark-note'>Los gráficos de deterioro son estimaciones preliminares y no sustituyen la verificación mecanístico-empírica detallada del Tomo I.</div>",unsafe_allow_html=True)
     else:
         st.info("Complete el módulo de Estructura para activar el Dashboard profesional.")
-
-

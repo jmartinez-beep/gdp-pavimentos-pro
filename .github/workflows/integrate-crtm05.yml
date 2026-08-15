@@ -31,6 +31,7 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
       - name: Aplicar integración CRTM05 WGS84
+        if: github.event_name == 'push'
         run: |
           python tools/integrate_crtm05.py
           python tools/fix_crtm05_label.py

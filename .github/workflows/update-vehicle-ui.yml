@@ -26,6 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Aplicar corrección de interfaz vehicular
+        if: github.event_name == 'push'
         run: python tools/improve_vehicle_inputs.py
       - name: Verificar sintaxis
         run: python -m py_compile app.py
@@ -38,7 +39,7 @@ jobs:
               'Cantidad diaria (veh/día)',
               'Factor camión',
               'vehicles = edited_vehicles.rename',
-              '["Categoría", "Factor camión", "TPD"]',
+              '["Categoría", "Grupo de tránsito", "Factor camión", "TPD"]',
               'weighted_daily = float((vehicles["TPD"] * vehicles["Factor camión"]).sum())',
           ]
           for item in required:
