@@ -1,0 +1,46 @@
+name: Mostrar índice de serviciabilidad
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/show_serviceability_index.py'
+      - '.github/workflows/show-serviceability-index.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Aplicar cambio
+        run: python tools/show_serviceability_index.py
+      - name: Verificar sintaxis
+        run: python -m py_compile app.py
+      - name: Verificar interfaz
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t = Path('app.py').read_text(encoding='utf-8')
+          assert '#### Confiabilidad y serviciabilidad' in t
+          assert 'Índice de confiabilidad (%)' in t
+          assert 'Índice de serviciabilidad' in t
+          assert 'serviceability_default = 2.0 if float(tpd_total) < 500.0 else 2.5' in t
+          print('Confiabilidad y serviciabilidad visibles correctamente.')
+          PY
+      - name: Guardar app.py actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No hay cambios pendientes."
+          else
+            git commit -m "Mostrar índice de serviciabilidad"
+            git push
+          fi
