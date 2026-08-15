@@ -26,6 +26,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: Aplicar mejora de acceso a proyectos
+        if: github.event_name == 'push'
         run: python tools/visible_project_access.py
       - name: Verificar sintaxis
         run: python -m py_compile app.py web_storage.py
@@ -39,8 +40,11 @@ jobs:
               '### 👤 Cuenta y proyectos',
               '💾 Guardar proyecto ahora',
               '🔐 Iniciar sesión / Crear cuenta',
-              'La administración completa de proyectos también está disponible',
-              'save_project(int(user["id"]), project_name_web.strip(), _capture_session_state())',
+              '📂 Mis proyectos guardados',
+              'Buscar por nombre',
+              '📂 Abrir proyecto',
+              'Confirmar eliminación',
+              'save_project(int(user["id"]), project_name_main.strip(), _capture_session_state())',
           ]
           for item in required:
               assert item in text, item
