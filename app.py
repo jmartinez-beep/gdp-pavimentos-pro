@@ -4267,22 +4267,15 @@ with pdash:
     selected_total = float(st.session_state.get("total_thickness", total_thickness or 0.0))
     dash_tomo = active_tomo
 
-    # Encabezado superior
-    hleft, hcenter, hright = st.columns([1.0, 2.2, 1.15], gap="small")
-    with hleft:
-        tomo_label = "Tomo I" if dash_tomo == "Tomo I" else "Tomo II"
-        tomo_method = "Diseño mecanístico-empírico" if dash_tomo == "Tomo I" else "Catálogo simplificado"
-        tomo_icon = "📗" if dash_tomo == "Tomo I" else "📘"
-        st.markdown(
-            f"<div class='panel-card'><div class='panel-title'>Normativa activa</div>"
-            f"<div style='font-size:1.45rem;font-weight:900;color:#fff'>{tomo_icon} {tomo_label}</div>"
-            f"<div style='color:#9eb3c8;margin-top:5px'>{tomo_method}</div></div>",
-            unsafe_allow_html=True,
-        )
-    with hcenter:
-        st.markdown(f"""<div class='panel-card'><div class='panel-title'>Proyecto</div><b>{project_name}</b><br><span style='color:#9eb3c8'>Ubicación: {location} &nbsp; | &nbsp; Tipo: {road_type} &nbsp; | &nbsp; Pavimento: {pavement_type}</span></div>""", unsafe_allow_html=True)
-    with hright:
-        st.markdown(f"""<div class='panel-card'><div class='panel-title'>Estado del diseño</div><span style='color:#42e07a;font-weight:850'>● Motor de cálculo activo</span><br><span style='color:#9eb3c8'>Versión 1.0 beta escritorio · {project_date}</span></div>""", unsafe_allow_html=True)
+    # Encabezado compacto: el selector superior ya muestra la normativa activa.
+    st.markdown(
+        f"""<div class='panel-card' style='display:flex;justify-content:space-between;align-items:center;gap:18px'>
+        <div><div class='panel-title'>Proyecto</div><b>{project_name}</b><br>
+        <span style='color:#9eb3c8'>Ubicación: {location} &nbsp; · &nbsp; Tipo: {road_type} &nbsp; · &nbsp; Pavimento: {pavement_type}</span></div>
+        <div style='text-align:right;white-space:nowrap'><span style='color:#42e07a;font-weight:850'>● Motor activo</span><br>
+        <span style='color:#9eb3c8'>{project_date}</span></div></div>""",
+        unsafe_allow_html=True,
+    )
 
     # Tarjetas KPI
     k1,k2,k3,k4,k5,k6 = st.columns(6, gap="small")
@@ -4307,30 +4300,35 @@ with pdash:
         c_left,c_mid,c_right=st.columns([1.0,2.55,1.05],gap="small")
         surface_cm=float(selected_dash.get('Carpeta_cm',0)) if float(selected_dash.get('Carpeta_cm',0))>0 else 2.0
         with c_left:
-            section_panel_title = "Sección propuesta" if dash_tomo == "Tomo I" else "Alternativa de catálogo seleccionada"
-            st.markdown(f"<div class='panel-card'><div class='panel-title'>{section_panel_title}</div>",unsafe_allow_html=True)
-            st.markdown(f"### {selected_dash.get('Código','')} — {selected_dash.get('Superficie','')}")
+            st.markdown("<div class='panel-card'><div class='panel-title'>Composición y origen</div>",unsafe_allow_html=True)
             if dash_tomo == "Tomo I":
                 origin_t1 = str(selected_dash.get("Origen_TomoI", "Definida por el usuario"))
                 compat = "Sección importada del Tomo II para evaluación mecanístico-empírica" if origin_t1.startswith("Importada") else "Sección propuesta por el usuario para evaluación mecanístico-empírica"
             else:
                 compat="Alternativa compatible con la combinación calculada" if exact_match else "Alternativa de visualización; combinación no incorporada completamente"
             st.markdown(f"<div class='status-ok'>✓ {compat}<br>{tclass} — {sclass} — {int(years)} años</div>",unsafe_allow_html=True)
-            rows=[
-                ("#171b22","Carpeta / superficie",f"{surface_cm:.0f} cm"),
-                ("#c5c7c9","Base granular",f"{float(selected_dash.get('Base_cm',0)):.0f} cm"),
+            base_stabilized_dash = float(selected_dash.get("Base_estabilizada_cm", 0) or 0)
+            base_granular_dash = float(selected_dash.get("Base_granular_cm", 0) or 0)
+            if base_granular_dash <= 0 and base_stabilized_dash <= 0:
+                base_granular_dash = float(selected_dash.get("Base_cm", 0) or 0)
+            rows=[("#171b22","Carpeta / superficie",f"{surface_cm:.0f} cm")]
+            if base_granular_dash > 0:
+                rows.append(("#c5c7c9","Base granular",f"{base_granular_dash:.0f} cm"))
+            if base_stabilized_dash > 0:
+                rows.append(("#d9a441","Base estabilizada",f"{base_stabilized_dash:.0f} cm"))
+            rows.extend([
                 ("#e38313","Subbase granular",f"{float(selected_dash.get('Subbase_cm',0)):.0f} cm"),
                 ("#6f3518",f"Subrasante {sclass}",f"CBR {cbr_design:.1f}%"),
-            ]
+            ])
             for color,name,val in rows:
                 st.markdown(f"<div class='layer-row'><span class='layer-dot' style='background:{color}'></span><span>{name}</span><b>{val}</b></div>",unsafe_allow_html=True)
-            st.markdown(f"<div class='thickness-box'><span style='font-size:.72rem;color:#9eb3c8'>ESPESOR TOTAL ESTRUCTURAL</span><br>{selected_total:.0f} cm</div></div>",unsafe_allow_html=True)
+            st.markdown("</div>",unsafe_allow_html=True)
 
         with c_mid:
             st.markdown("<div class='panel-card'><div class='panel-title'>Modelo 3D interactivo</div>",unsafe_allow_html=True)
             view_mode=st.segmented_control("Vista",["Vista explotada","Vista unida"],default="Vista explotada",key="dash_view_mode",label_visibility="collapsed")
             fig_dash=pavement_3d_figure(selected_dash,sclass,cbr_design,view_mode=="Vista explotada")
-            fig_dash.update_layout(height=600,paper_bgcolor="#07192a",plot_bgcolor="#07192a",margin=dict(l=0,r=0,t=45,b=0))
+            fig_dash.update_layout(title=None,height=600,paper_bgcolor="#07192a",plot_bgcolor="#07192a",margin=dict(l=0,r=0,t=20,b=0))
             render_rotating_3d(fig_dash, key="dashboard_view", height=610, auto_rotate=st.session_state.get("auto_rotate_3d", True))
             st.markdown("<div class='dark-note'>Rotación automática lenta · Arrastre para orbitar · Scroll para acercar/alejar</div></div>",unsafe_allow_html=True)
 
