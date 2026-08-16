@@ -3808,12 +3808,37 @@ with pperf:
             else:
                 st.warning("Ejecute primero la respuesta mecanística de cribado en **6. Diseño flexible** para vincular deformaciones críticas con este módulo.")
             st.markdown("#### Funciones de transferencia configurables")
-            transfer_enabled = st.checkbox("Activar modelo configurable de daño (requiere calibración del proyecto)", value=False, key="transfer_enabled")
+            transfer_enabled = st.checkbox("Activar modelo experimental de daño (requiere calibración documentada)", value=False, key="transfer_enabled")
             tf1, tf2, tf3, tf4 = st.columns(4)
-            transfer_reference_esal = tf1.number_input("ESAL de referencia del modelo", min_value=1.0, value=1_000_000.0, step=100_000.0, key="transfer_ref_esal")
+            transfer_reference_esal = tf1.number_input(
+                "ESAL de referencia de calibración",
+                min_value=1.0,
+                value=1_000_000.0,
+                step=100_000.0,
+                key="transfer_ref_esal",
+                help=(
+                    "Debe corresponder al tránsito acumulado del conjunto de datos usado para calibrar "
+                    "los coeficientes. No es necesariamente el ESAL del proyecto ni un valor normativo GDP."
+                ),
+            )
             fatigue_exponent = tf2.number_input("Exponente de transferencia fatiga", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_fatigue_exp")
             rutting_exponent = tf3.number_input("Exponente de transferencia ahuellamiento", min_value=0.1, max_value=10.0, value=1.0, step=0.1, key="transfer_rut_exp")
             transfer_sigma = tf4.number_input("σln del modelo de transferencia", min_value=0.0, max_value=1.0, value=float(st.session_state.get('mechanistic_screening',{}).get('response_log_sigma',0.15)), step=0.01, key="transfer_sigma")
+            transfer_calibration_source = st.text_input(
+                "Fuente de la calibración del modelo",
+                placeholder="Informe, estudio, laboratorio, versión y fecha",
+                key="transfer_calibration_source",
+                help="Registre el documento o conjunto de datos del cual provienen el ESAL de referencia y los coeficientes.",
+            )
+            st.caption(
+                "El valor inicial de 1 000 000 ESAL es únicamente demostrativo y no constituye un valor oficial "
+                "del GDP-2024, CR-2020 ni AASHTO. El modelo usa la relación ESAL del proyecto / ESAL de calibración."
+            )
+            if transfer_enabled and not transfer_calibration_source.strip():
+                st.warning(
+                    "Modelo experimental activo sin fuente de calibración documentada. Sus resultados deben "
+                    "tratarse como exploratorios y no como criterio de aceptación del diseño."
+                )
             climate_factor_tf = float(st.session_state.get('climate_material', {}).get('relative_climate_factor', 1.0) or 1.0)
             transfer_result = {}
             if transfer_enabled and mech_state:
@@ -3821,6 +3846,7 @@ with pperf:
                     mech_state, esal, climate_factor_tf, float(st.session_state.get('design_reliability',{}).get('reliability_pct',75.0)),
                     transfer_sigma, transfer_reference_esal, fatigue_exponent, rutting_exponent
                 )
+                transfer_result["calibration_source"] = transfer_calibration_source.strip() or "No documentada"
                 st.session_state.transfer_model = transfer_result
                 td1, td2, td3 = st.columns(3)
                 td1.metric("Daño fatiga de diseño", f"{transfer_result['fatigue_damage_design']:.3f}", "≤1 criterio interno" if transfer_result['fatigue_damage_design'] <= 1 else ">1 revisar")
