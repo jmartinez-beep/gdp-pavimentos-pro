@@ -1974,6 +1974,14 @@ def _restore_session_state(saved):
         st.session_state.auth_user = auth_user
 
 
+def _format_project_timestamp(value):
+    """Format storage timestamps for the project manager without exposing raw ISO text."""
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return str(value or "—")
+
+
 def _auth_screen():
     st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">Acceso multiusuario · proyectos persistentes · preparado para despliegue web.</div>', unsafe_allow_html=True)
@@ -2100,24 +2108,24 @@ with st.sidebar:
 # Acceso visible a cuenta y proyectos, aun cuando la barra lateral se haya colapsado manualmente.
 st.markdown("### 👤 Cuenta y proyectos")
 if int(user.get("id", 0)) > 0:
-    account_col, save_name_col, save_col = st.columns([2.2, 1.3, 1])
-    with account_col:
-        st.success(
-            f"Sesión iniciada como **{user.get('display_name', user.get('username', 'Usuario'))}**. "
-            "Desde este panel puede guardar, buscar y abrir sus proyectos sin usar la barra lateral."
-        )
-        active_autosave_name = st.session_state.get("_active_project_name")
-        if active_autosave_name:
-            last_autosave = st.session_state.get("_autosave_last_at", "esta sesión")
-            if st.session_state.get("_autosave_status") == "error":
-                st.error(f"Guardado automático pendiente para **{active_autosave_name}**.")
-            else:
-                st.caption(f"☁️ Guardado automático activo: **{active_autosave_name}** · último guardado {last_autosave}")
+    st.success(
+        f"Sesión iniciada como **{user.get('display_name', user.get('username', 'Usuario'))}**. "
+        "Guarde un proyecto nuevo o continúe trabajando sobre uno existente."
+    )
+    active_autosave_name = st.session_state.get("_active_project_name")
+    if active_autosave_name:
+        last_autosave = st.session_state.get("_autosave_last_at", "esta sesión")
+        if st.session_state.get("_autosave_status") == "error":
+            st.error(f"Guardado automático pendiente para **{active_autosave_name}**.")
         else:
-            st.caption("El guardado automático se activará después del primer guardado manual o al abrir un proyecto.")
+            st.caption(f"☁️ Proyecto activo: **{active_autosave_name}** · guardado automático {last_autosave}")
+    else:
+        st.caption("El guardado automático se activará después del primer guardado manual o al abrir un proyecto.")
+
+    save_name_col, save_col = st.columns([3, 1])
     with save_name_col:
         project_name_main = st.text_input(
-            "Nombre para guardar",
+            "Nombre del proyecto",
             value=st.session_state.get("main_project_save_name", project_name_web or "Proyecto GDP"),
             key="main_project_save_name",
         )
@@ -2150,10 +2158,7 @@ if int(user.get("id", 0)) > 0:
             if project_search.strip().casefold() in str(project["name"]).casefold()
         ]
         if filtered_projects:
-            main_options = {
-                f"{project['name']} · actualizado {project['updated_at']}": project
-                for project in filtered_projects
-            }
+            main_options = {str(project["name"]): project for project in filtered_projects}
             with project_col:
                 selected_project_label = st.selectbox(
                     "Proyecto guardado",
@@ -2162,10 +2167,10 @@ if int(user.get("id", 0)) > 0:
                 )
             selected_project = main_options[selected_project_label]
             st.caption(
-                f"Última actualización: {selected_project['updated_at']} · "
-                f"Creado: {selected_project['created_at']}"
+                f"Actualizado: **{_format_project_timestamp(selected_project['updated_at'])}** · "
+                f"Creado: {_format_project_timestamp(selected_project['created_at'])}"
             )
-            open_col, confirm_col, delete_col = st.columns([1, 1.5, 1])
+            open_col, confirm_col, delete_col = st.columns([1.2, 1, 1.2])
             with open_col:
                 if st.button("📂 Abrir proyecto", use_container_width=True, key="main_open_project"):
                     saved = load_project(int(user["id"]), int(selected_project["id"]))
@@ -2216,7 +2221,8 @@ else:
 if "active_tomo" not in st.session_state:
     st.session_state.active_tomo = "Tomo II"
 
-head_left, head_mid, head_right = st.columns([1.2, 2.2, 1.2])
+st.markdown("### Metodología de diseño")
+head_left, head_mid = st.columns([1, 3])
 with head_left:
     active_tomo = st.segmented_control(
         "Normativa activa", ["Tomo I", "Tomo II"],
@@ -2228,8 +2234,7 @@ with head_mid:
         st.markdown('<div class="mode-card">📘 <b>Tomo activo: II — Catálogo simplificado</b><br><span style="font-weight:500">Selección de estructuras para vías de bajo volumen.</span></div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="mode-card">📗 <b>Tomo activo: I — Diseño mecanístico-empírico</b><br><span style="font-weight:500">Evaluación preliminar de pavimentos flexibles y semirrígidos.</span></div>', unsafe_allow_html=True)
-with head_right:
-    st.caption("Cambie de tomo en cualquier momento. Los datos del proyecto permanecen en la sesión.")
+st.caption("Puede cambiar de tomo sin perder los datos del proyecto guardados en la sesión.")
 
 # Valores compartidos entre módulos
 selected_row = st.session_state.get("selected_row")
@@ -2237,12 +2242,6 @@ total_thickness = float(st.session_state.get("total_thickness", 0.0))
 exact_match = bool(st.session_state.get("exact_match", False))
 
 # Pestañas
-st.markdown("""
-<div style="background:#123b5d;color:white;padding:12px 18px;border-radius:10px;margin-bottom:14px;font-weight:700;">
-GDP Pavimentos Pro 2024 — versión 1.1 · Web Ready Multiusuario
-</div>
-""", unsafe_allow_html=True)
-
 pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6 = st.tabs([
     "🏠 Dashboard", "1. Proyecto", "2. Tránsito", "3. Subrasante", "4. Clima", "5. Estructura",
     "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Control CR-2020", "14. Exportación", "15. Informe"
