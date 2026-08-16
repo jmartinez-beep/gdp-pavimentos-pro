@@ -2130,27 +2130,23 @@ if int(user.get("id", 0)) > 0:
             value=st.session_state.get("main_project_save_name", project_name_web or "Proyecto GDP"),
             key="main_project_save_name",
         )
-        st.markdown("#### 📂 Mis proyectos guardados")
         if projects:
-            search_col, project_col = st.columns([1, 2])
-            with search_col:
-                project_search = st.text_input(
-                    "Buscar por nombre",
-                    placeholder="Escriba parte del nombre",
-                    key="main_project_search",
-                )
+            project_search = st.text_input(
+                "Buscar por nombre",
+                placeholder="Escriba parte del nombre",
+                key="main_project_search",
+            )
             filtered_projects = [
                 project for project in projects
                 if project_search.strip().casefold() in str(project["name"]).casefold()
             ]
             if filtered_projects:
                 main_options = {str(project["name"]): project for project in filtered_projects}
-                with project_col:
-                    selected_project_label = st.selectbox(
-                        "Proyecto guardado",
-                        list(main_options.keys()),
-                        key="main_project_pick",
-                    )
+                selected_project_label = st.selectbox(
+                    "Proyecto guardado",
+                    list(main_options.keys()),
+                    key="main_project_pick",
+                )
                 selected_project = main_options[selected_project_label]
                 st.caption(
                     f"Actualizado: **{_format_project_timestamp(selected_project['updated_at'])}** · "
