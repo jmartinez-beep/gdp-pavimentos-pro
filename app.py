@@ -22,7 +22,7 @@ from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 from road_alignment import RoadAlignmentError, road_route
-from project_state import is_active_control_key, is_ephemeral_state_key
+from project_state import is_active_control_key, is_ephemeral_state_key, tomo1_structure_identifier
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -3268,8 +3268,17 @@ with p4:
             "Mejoramiento de subrasante (cm, si aplica)", min_value=0.0, max_value=150.0,
             value=float(dflt.get("Mejoramiento_subrasante_cm", 0.0) or 0.0), step=1.0, key="tomo1_improvement_cm"
         )
+        raw_structure_id = str(dflt.get("Código", "") or "").strip()
+        normalized_structure_id = tomo1_structure_identifier(source, raw_structure_id)
+        current_structure_id = str(st.session_state.get("tomo1_structure_id", "") or "").strip()
+        if current_structure_id and (
+            current_structure_id == raw_structure_id
+            or (source.startswith("Importada") and not current_structure_id.startswith("T1-EVAL-"))
+            or (not source.startswith("Importada") and current_structure_id.startswith("T1-EVAL-"))
+        ):
+            st.session_state.tomo1_structure_id = normalized_structure_id
         structure_id = i2.text_input(
-            "Identificador de la sección", value=str(dflt.get("Código", "T1-PROP-01") or "T1-PROP-01"), key="tomo1_structure_id"
+            "Identificador de la sección", value=normalized_structure_id, key="tomo1_structure_id"
         )
 
         base_total_cm = float(base_granular_cm + base_stabilized_cm)
@@ -4287,7 +4296,7 @@ with pdash:
         (k3,"Subrasante",sclass,f"CBR: {cbr_design:.2f}%<br>Módulo resiliente: {mr:.1f} MPa","#9d50ff"),
         (k4,"Periodo de diseño",f"{int(years)} años",f"Crecimiento: {growth_pct:.2f}%<br>Factor G: {gf:.3f}","#ff831d"),
         (k5,"Temperatura sitio",f"{air_temp_c:.1f} °C",f"Pavimento LTPP: {tp_ltpp:.1f} °C<br>Pavimento SHRP: {tp_shrp:.1f} °C","#ff4545"),
-        (k6,"Estructura seleccionada",str(selected_dash.get('Código','—')) if selected_dash else "—",f"{selected_dash.get('Superficie','Sin seleccionar') if selected_dash else 'Sin seleccionar'}<br>Espesor: {selected_total:.0f} cm","#15c6ca"),
+        (k6,"Sección propuesta" if dash_tomo == "Tomo I" else "Estructura de catálogo seleccionada",str(selected_dash.get('Código','—')) if selected_dash else "—",f"{selected_dash.get('Superficie','Sin seleccionar') if selected_dash else 'Sin seleccionar'}<br>Espesor: {selected_total:.0f} cm","#15c6ca"),
     ]
     for col,label,value,note,accent in cards:
         with col:
@@ -4298,9 +4307,14 @@ with pdash:
         c_left,c_mid,c_right=st.columns([1.0,2.55,1.05],gap="small")
         surface_cm=float(selected_dash.get('Carpeta_cm',0)) if float(selected_dash.get('Carpeta_cm',0))>0 else 2.0
         with c_left:
-            st.markdown("<div class='panel-card'><div class='panel-title'>Alternativa seleccionada</div>",unsafe_allow_html=True)
+            section_panel_title = "Sección propuesta" if dash_tomo == "Tomo I" else "Alternativa de catálogo seleccionada"
+            st.markdown(f"<div class='panel-card'><div class='panel-title'>{section_panel_title}</div>",unsafe_allow_html=True)
             st.markdown(f"### {selected_dash.get('Código','')} — {selected_dash.get('Superficie','')}")
-            compat="Alternativa compatible con la combinación calculada" if exact_match else "Alternativa de visualización; combinación no incorporada completamente"
+            if dash_tomo == "Tomo I":
+                origin_t1 = str(selected_dash.get("Origen_TomoI", "Definida por el usuario"))
+                compat = "Sección importada del Tomo II para evaluación mecanístico-empírica" if origin_t1.startswith("Importada") else "Sección propuesta por el usuario para evaluación mecanístico-empírica"
+            else:
+                compat="Alternativa compatible con la combinación calculada" if exact_match else "Alternativa de visualización; combinación no incorporada completamente"
             st.markdown(f"<div class='status-ok'>✓ {compat}<br>{tclass} — {sclass} — {int(years)} años</div>",unsafe_allow_html=True)
             rows=[
                 ("#171b22","Carpeta / superficie",f"{surface_cm:.0f} cm"),
