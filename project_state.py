@@ -7,7 +7,8 @@ EPHEMERAL_STATE_KEYS = {
     "main_project_save_name", "main_project_search", "main_project_pick", "main_confirm_delete_project",
     "main_save_project", "main_open_project", "main_delete_project",
     "run_screening_optimization", "evaluate_tomo2_in_tomo1",
-    "_pending_active_tomo", "_pending_tomo1_import",
+    "apply_nearby_tomo2_period", "evaluate_unassigned_tomo2_in_tomo1",
+    "_pending_active_tomo", "_pending_tomo1_import", "_pending_tomo2_design_period",
     "_active_project_name", "_autosave_hash", "_autosave_status", "_autosave_error",
     "_autosave_last_at",
 }
