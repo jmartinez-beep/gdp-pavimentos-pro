@@ -38,3 +38,7 @@ def test_tomo1_identifiers_distinguish_proposed_and_imported_sections():
     assert tomo1_structure_identifier("Importada de Tomo II para evaluación", "EBE-2") == "T1-EVAL-EBE-2"
     assert tomo1_structure_identifier("Importada de Tomo II para evaluación", "T1-EVAL-EBE-2") == "T1-EVAL-EBE-2"
     assert tomo1_structure_identifier("Definida por el usuario", "T1-EVAL-EBE-2") == "T1-PROP-01"
+    assert tomo1_structure_identifier("Definida por el usuario", "EBE-2") == "T1-PROP-01"
+    assert tomo1_structure_identifier("Definida por el usuario", "EBG-4") == "T1-PROP-01"
+    assert tomo1_structure_identifier("Definida por el usuario", "ETS-1") == "T1-PROP-01"
+    assert tomo1_structure_identifier("Definida por el usuario", "T1-PROP-JORCO") == "T1-PROP-JORCO"
