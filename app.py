@@ -2215,6 +2215,11 @@ else:
 if "active_tomo" not in st.session_state:
     st.session_state.active_tomo = "Tomo II"
 
+pending_active_tomo = st.session_state.pop("_pending_active_tomo", None)
+if pending_active_tomo in ("Tomo I", "Tomo II"):
+    st.session_state.active_tomo = pending_active_tomo
+    st.session_state.tomo_selector = pending_active_tomo
+
 st.markdown("### Metodología de diseño")
 head_left, head_mid = st.columns([1, 3])
 with head_left:
@@ -3132,6 +3137,19 @@ with p4:
             k2.metric("Tipo de superficie", selected_row["Superficie"])
             k3.metric("Espesor de capas", f"{total_thickness:.0f} cm")
 
+            st.caption(
+                "Si necesita una comprobación mecanístico-empírica complementaria, puede copiar "
+                "esta geometría a Tomo I. La alternativa del catálogo Tomo II no se modifica ni se reclasifica."
+            )
+            if st.button(
+                "🔬 Evaluar esta estructura en Tomo I",
+                key="evaluate_tomo2_in_tomo1",
+                use_container_width=True,
+            ):
+                st.session_state._pending_tomo1_import = dict(selected_row)
+                st.session_state._pending_active_tomo = "Tomo I"
+                st.rerun()
+
             left, right = st.columns([0.9, 2.1], gap="large")
             with left:
                 st.markdown("#### Capas")
@@ -3216,21 +3234,29 @@ with p4:
             "oficializada mediante Decreto Ejecutivo 44762-MOPT."
         )
 
+        pending_t1_import = st.session_state.pop("_pending_tomo1_import", None)
         previous_t1 = st.session_state.get("tomo1_structure", {})
-        imported = st.session_state.get("selected_row") if st.session_state.get("selected_row") and not previous_t1 else None
-        source_default = "Importada de Tomo II para evaluación" if imported else "Definida por el usuario"
-        source = st.segmented_control(
-            "Origen de la sección propuesta",
-            ["Definida por el usuario", "Importada de Tomo II para evaluación"],
-            default=source_default,
-            key="tomo1_structure_source",
-        ) or source_default
-
-        import_row = imported if source.startswith("Importada") and imported else {}
-        if source.startswith("Importada") and not import_row:
-            st.warning("No hay una alternativa Tomo II disponible en la sesión. Se mantienen los valores editables de Tomo I.")
-
-        dflt = previous_t1 or import_row
+        if isinstance(pending_t1_import, dict) and pending_t1_import:
+            for widget_key in (
+                "tomo1_structure_source", "tomo1_pavement_type", "tomo1_asphalt_cm",
+                "tomo1_base_granular_cm", "tomo1_base_stabilized_cm", "tomo1_subbase_cm",
+                "tomo1_improvement_cm", "tomo1_structure_id",
+            ):
+                st.session_state.pop(widget_key, None)
+            source = "Importada de Tomo II para evaluación"
+            dflt = pending_t1_import
+            st.info(
+                "Se copió la geometría de la alternativa Tomo II para una evaluación complementaria en Tomo I. "
+                "Esto no modifica ni reclasifica la alternativa original del catálogo."
+            )
+        else:
+            source = str(previous_t1.get("Origen_TomoI", "Definida por el usuario"))
+            dflt = previous_t1
+            if source.startswith("Importada"):
+                st.info(
+                    "Esta sección conserva una geometría importada desde Tomo II para evaluación complementaria; "
+                    "no representa una alternativa propia del Tomo I."
+                )
         t1_type = st.selectbox(
             "Tipo de pavimento a evaluar",
             ["Flexible", "Semirrígido"],
