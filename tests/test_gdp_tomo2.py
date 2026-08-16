@@ -2,6 +2,7 @@ from gdp_tomo2 import (
     classify_cbr,
     classify_heavy_pct,
     classify_tpd,
+    nearby_catalog_options,
     select_structures,
 )
 
@@ -46,3 +47,14 @@ def test_traced_result_schema():
         assert "Tabla 301-" in tr["asignacion"]
         assert tr["criterio"]
         assert tr["celda_original"]
+
+
+def test_empty_cell_remains_unassigned_and_guidance_is_only_tabulated():
+    result = select_structures(tpd=1227, heavy_pct=14.8329, cbr=6.1, period=10)
+    assert result["status"] == "sin_alternativa"
+    assert result["alternatives"] == []
+
+    nearby = nearby_catalog_options(tpd=1227, heavy_pct=14.8329, cbr=6.1, period=10)
+    assert nearby
+    assert any(row["ajuste"] == "Periodo de diseño" and row["valor"] == 6 for row in nearby)
+    assert all(row["estructuras"] for row in nearby)
