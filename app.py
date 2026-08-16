@@ -3705,6 +3705,7 @@ with pflex:
             opt_base_price = op3.number_input("Precio base para optimización (₡/m³)", min_value=0.0, value=28000.0, step=1000.0, key="opt_base_price")
             opt_subbase_price = op4.number_input("Precio subbase para optimización (₡/m³)", min_value=0.0, value=22000.0, step=1000.0, key="opt_subbase_price")
             opt_area = float(project_length_m) * float(project_width_m)
+            st.session_state.pop("run_screening_optimization", None)
             if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
                 opt_df = optimize_structure_with_constraints(
                     selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),

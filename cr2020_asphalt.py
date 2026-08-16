@@ -215,6 +215,7 @@ def render_asphalt_cr2020_checklist(project_name: str = "") -> dict[str, Any]:
         "evidencia": "Evidencia", "referencia": "Referencia", "origen": "Origen del criterio"
     })
     st.dataframe(display_df, use_container_width=True, hide_index=True)
+    st.session_state.pop("download_cr2020_asphalt_checklist", None)
     st.download_button(
         "Descargar checklist constructivo (CSV)",
         df.to_csv(index=False).encode("utf-8-sig"),
