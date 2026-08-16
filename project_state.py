@@ -18,6 +18,8 @@ ACTIVE_CONTROL_KEYS = {
     "main_save_project", "main_open_project", "main_delete_project",
 }
 
+TOMO2_CATALOG_PREFIXES = ("EBE-", "EBG-", "ETS-")
+
 
 def is_ephemeral_state_key(key: object) -> bool:
     """Return True for widget-owned state that must not be restored directly."""
@@ -45,6 +47,10 @@ def tomo1_structure_identifier(source: object, code: object) -> str:
         if code_text.startswith("T1-EVAL-"):
             return code_text
         return f"T1-EVAL-{code_text}" if code_text else "T1-EVAL-01"
-    if not code_text or code_text.startswith("T1-EVAL-"):
+    if (
+        not code_text
+        or code_text.startswith("T1-EVAL-")
+        or code_text.startswith(TOMO2_CATALOG_PREFIXES)
+    ):
         return "T1-PROP-01"
     return code_text
