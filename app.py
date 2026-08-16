@@ -2122,15 +2122,47 @@ if int(user.get("id", 0)) > 0:
     else:
         st.caption("El guardado automático se activará después del primer guardado manual o al abrir un proyecto.")
 
-    save_name_col, save_col = st.columns([3, 1])
-    with save_name_col:
+    project_data_col, project_actions_col = st.columns([3, 1], gap="large")
+    selected_project = None
+    with project_data_col:
         project_name_main = st.text_input(
             "Nombre del proyecto",
             value=st.session_state.get("main_project_save_name", project_name_web or "Proyecto GDP"),
             key="main_project_save_name",
         )
-    with save_col:
-        st.write("")
+        st.markdown("#### 📂 Mis proyectos guardados")
+        if projects:
+            search_col, project_col = st.columns([1, 2])
+            with search_col:
+                project_search = st.text_input(
+                    "Buscar por nombre",
+                    placeholder="Escriba parte del nombre",
+                    key="main_project_search",
+                )
+            filtered_projects = [
+                project for project in projects
+                if project_search.strip().casefold() in str(project["name"]).casefold()
+            ]
+            if filtered_projects:
+                main_options = {str(project["name"]): project for project in filtered_projects}
+                with project_col:
+                    selected_project_label = st.selectbox(
+                        "Proyecto guardado",
+                        list(main_options.keys()),
+                        key="main_project_pick",
+                    )
+                selected_project = main_options[selected_project_label]
+                st.caption(
+                    f"Actualizado: **{_format_project_timestamp(selected_project['updated_at'])}** · "
+                    f"Creado: {_format_project_timestamp(selected_project['created_at'])}"
+                )
+            else:
+                st.info("No se encontraron proyectos que coincidan con la búsqueda.")
+        else:
+            st.info("Aún no hay proyectos guardados para esta cuenta.")
+
+    with project_actions_col:
+        st.markdown("#### Acciones")
         if st.button("💾 Guardar proyecto ahora", use_container_width=True, key="main_save_project"):
             if project_name_main.strip():
                 state_to_save = _capture_session_state()
@@ -2143,68 +2175,34 @@ if int(user.get("id", 0)) > 0:
                 st.rerun()
             else:
                 st.warning("Indique un nombre para el proyecto.")
-
-    st.markdown("#### 📂 Mis proyectos guardados")
-    if projects:
-        search_col, project_col = st.columns([1, 2])
-        with search_col:
-            project_search = st.text_input(
-                "Buscar por nombre",
-                placeholder="Escriba parte del nombre",
-                key="main_project_search",
-            )
-        filtered_projects = [
-            project for project in projects
-            if project_search.strip().casefold() in str(project["name"]).casefold()
-        ]
-        if filtered_projects:
-            main_options = {str(project["name"]): project for project in filtered_projects}
-            with project_col:
-                selected_project_label = st.selectbox(
-                    "Proyecto guardado",
-                    list(main_options.keys()),
-                    key="main_project_pick",
-                )
-            selected_project = main_options[selected_project_label]
-            st.caption(
-                f"Actualizado: **{_format_project_timestamp(selected_project['updated_at'])}** · "
-                f"Creado: {_format_project_timestamp(selected_project['created_at'])}"
-            )
-            open_col, confirm_col, delete_col = st.columns([1.2, 1, 1.2])
-            with open_col:
-                if st.button("📂 Abrir proyecto", use_container_width=True, key="main_open_project"):
-                    saved = load_project(int(user["id"]), int(selected_project["id"]))
-                    if saved is not None:
-                        _restore_session_state(saved)
-                        st.session_state._active_project_name = selected_project["name"]
-                        st.session_state._autosave_hash = project_state_fingerprint(saved)
-                        st.session_state._autosave_status = "saved"
-                        st.session_state._loaded_project_notice = selected_project["name"]
-                        st.rerun()
-                    else:
-                        st.error("No fue posible recuperar el proyecto seleccionado.")
-            with confirm_col:
-                confirm_main_delete = st.checkbox(
-                    "Confirmar eliminación",
-                    key="main_confirm_delete_project",
-                )
-            with delete_col:
-                if st.button(
-                    "🗑️ Eliminar proyecto",
-                    use_container_width=True,
-                    disabled=not confirm_main_delete,
-                    key="main_delete_project",
-                ):
-                    delete_project(int(user["id"]), int(selected_project["id"]))
-                    if st.session_state.get("_active_project_name") == selected_project["name"]:
-                        st.session_state.pop("_active_project_name", None)
-                        st.session_state.pop("_autosave_hash", None)
-                    st.success(f"Proyecto “{selected_project['name']}” eliminado.")
+        if selected_project:
+            if st.button("📂 Abrir proyecto", use_container_width=True, key="main_open_project"):
+                saved = load_project(int(user["id"]), int(selected_project["id"]))
+                if saved is not None:
+                    _restore_session_state(saved)
+                    st.session_state._active_project_name = selected_project["name"]
+                    st.session_state._autosave_hash = project_state_fingerprint(saved)
+                    st.session_state._autosave_status = "saved"
+                    st.session_state._loaded_project_notice = selected_project["name"]
                     st.rerun()
-        else:
-            st.info("No se encontraron proyectos que coincidan con la búsqueda.")
-    else:
-        st.info("Aún no hay proyectos guardados para esta cuenta.")
+                else:
+                    st.error("No fue posible recuperar el proyecto seleccionado.")
+            confirm_main_delete = st.checkbox(
+                "Confirmar eliminación",
+                key="main_confirm_delete_project",
+            )
+            if st.button(
+                "🗑️ Eliminar proyecto",
+                use_container_width=True,
+                disabled=not confirm_main_delete,
+                key="main_delete_project",
+            ):
+                delete_project(int(user["id"]), int(selected_project["id"]))
+                if st.session_state.get("_active_project_name") == selected_project["name"]:
+                    st.session_state.pop("_active_project_name", None)
+                    st.session_state.pop("_autosave_hash", None)
+                st.success(f"Proyecto “{selected_project['name']}” eliminado.")
+                st.rerun()
 else:
     guest_col, login_col = st.columns([3, 1])
     with guest_col:
