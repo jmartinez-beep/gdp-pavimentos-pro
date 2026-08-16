@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 71941)
-Total output lines: 4393
-
 from __future__ import annotations
 
 import io
@@ -1816,7 +1813,1381 @@ def climate_alerts(active_tomo: str, pavement_type: str, air_c: float, pavement_
         if pavement_c >= 45 or pavement_c <= 15:
             alerts.append(("warning", "La temperatura estimada se encuentra en una condición térmica exigente. Aunque el Tomo II usa un catálogo preevaluado, se recomienda una revisión complementaria con el Tomo I."))
     if not alerts:
-        alerts.append(("success", "La información climática básica está completa y no se detectaron alertas auto…21941 tokens truncated…x=True)
+        alerts.append(("success", "La información climática básica está completa y no se detectaron alertas automáticas."))
+    return alerts
+
+
+def present_value(amount: float, year: int, discount_rate: float) -> float:
+    return amount / ((1 + discount_rate) ** max(year, 0))
+
+def build_excel_workbook(payload: dict, vehicles_df: pd.DataFrame, alternatives_df: pd.DataFrame, maintenance_df: pd.DataFrame) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        pd.DataFrame([payload["project"]]).to_excel(writer, sheet_name="Proyecto", index=False)
+        vehicles_df.to_excel(writer, sheet_name="Transito", index=False)
+        pd.DataFrame([payload["traffic"]]).to_excel(writer, sheet_name="Resultados_transito", index=False)
+        pd.DataFrame([payload["subgrade"]]).to_excel(writer, sheet_name="Subrasante", index=False)
+        pd.DataFrame([payload.get("geometry", {})]).to_excel(writer, sheet_name="Geometria", index=False)
+        pd.DataFrame([payload.get("materials", {})]).to_excel(writer, sheet_name="Materiales", index=False)
+        pd.DataFrame([payload.get("reliability", {})]).to_excel(writer, sheet_name="Confiabilidad", index=False)
+        pd.DataFrame(payload.get("normative_evidence", [])).to_excel(writer, sheet_name="Evidencia_normativa", index=False)
+        pd.DataFrame([payload.get("granular_quality", {})]).to_excel(writer, sheet_name="Granulares_calidad", index=False)
+        pd.DataFrame([payload.get("layer_interfaces", {})]).to_excel(writer, sheet_name="Interfaces", index=False)
+        pd.DataFrame([payload.get("stabilized_base_model", {})]).to_excel(writer, sheet_name="Base_estabilizada", index=False)
+        pd.DataFrame([payload.get("construction_constraints", {})]).to_excel(writer, sheet_name="Restricciones", index=False)
+        pd.DataFrame(payload.get("scenario_comparison", [])).to_excel(writer, sheet_name="Escenarios", index=False)
+        pd.DataFrame([payload.get("mechanistic_screening", {})]).to_excel(writer, sheet_name="Respuesta_ME", index=False)
+        pd.DataFrame([payload.get("transfer_model", {})]).to_excel(writer, sheet_name="Transferencia", index=False)
+        pd.DataFrame(payload.get("homogeneous_segments", [])).to_excel(writer, sheet_name="Tramos", index=False)
+        pd.DataFrame([payload.get("rehabilitation", {})]).to_excel(writer, sheet_name="Rehabilitacion", index=False)
+        opt_export = payload.get("optimization_candidates", [])
+        pd.DataFrame(opt_export).to_excel(writer, sheet_name="Optimizacion", index=False)
+        climate_payload = dict(payload.get("climate", {}))
+        monthly_rows = climate_payload.pop("monthly_table", [])
+        pd.DataFrame([climate_payload]).to_excel(writer, sheet_name="Clima", index=False)
+        if monthly_rows:
+            pd.DataFrame(monthly_rows).to_excel(writer, sheet_name="Clima_mensual", index=False)
+        asphalt_control = payload.get("asphalt_cr2020", payload.get("asphalt_cr2010", {}))
+        if asphalt_control:
+            pd.DataFrame([{k:v for k,v in asphalt_control.items() if k != "checks"}]).to_excel(writer, sheet_name="Control_CR2020", index=False)
+            pd.DataFrame(asphalt_control.get("checks", [])).to_excel(writer, sheet_name="Checklist_CR2020", index=False)
+        alternatives_df.to_excel(writer, sheet_name="Alternativas", index=False)
+        maintenance_df.to_excel(writer, sheet_name="Ciclo_vida", index=False)
+        pd.DataFrame([payload.get("drainage", {})]).to_excel(writer, sheet_name="Drenaje", index=False)
+    return output.getvalue()
+
+def build_pdf_report(payload: dict) -> bytes:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib import colors
+    buff = io.BytesIO()
+    doc = SimpleDocTemplate(buff, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
+    styles = getSampleStyleSheet(); story=[]
+    story.append(Paragraph("GDP Pavimentos Pro 2024 — Memoria preliminar", styles["Title"]))
+    story.append(Paragraph(f"Proyecto: {payload['project']['name']} — {payload['project']['location']}", styles["Normal"]))
+    story.append(Paragraph(
+        f"CRTM05 EPSG:5367: E {payload['project'].get('crtm05_easting_m', 0):,.3f} m, "
+        f"N {payload['project'].get('crtm05_northing_m', 0):,.3f} m · "
+        f"WGS84 EPSG:4326: {payload['project'].get('latitude', 0):.7f}°, {payload['project'].get('longitude', 0):.7f}°",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1,12))
+    rows=[["Parámetro","Resultado"], ["Tomo activo", payload.get("active_tomo","")], ["TPD", f"{payload['traffic']['tpd_total']:,.0f}"], ["Crecimiento anual", f"{payload['traffic']['growth_rate']:.2f}%"], ["Factor de crecimiento G", f"{payload['traffic'].get('growth_factor', 0):.3f}"], ["Periodo de diseño", f"{payload['traffic']['years']} años"], ["ESAL", f"{payload['traffic']['esal']:,.0f}"], ["Clase", payload['traffic']['class']], ["CBR", f"{payload['subgrade']['cbr']:.2f}%"], ["Subrasante", payload['subgrade']['class']]]
+    if payload.get("active_tomo") == "Tomo I":
+        pdf_category = payload["traffic"].get("design_category", tomo1_design_category(float(payload["traffic"].get("esal", 0.0))))
+        rows.insert(8, ["Categoría de diseño Tomo I", f"Categoría {pdf_category}"])
+    climate = payload.get("climate", {})
+    geometry = payload.get("geometry", {})
+    materials = payload.get("materials", {})
+    reliability = payload.get("reliability", {})
+    mechanistic = payload.get("mechanistic_screening", {})
+    rows += [
+        ["Longitud de diseño", f"{geometry.get('length_m', 0):,.1f} m"],
+        ["Ancho de referencia", f"{geometry.get('paved_reference_width_m', 0):,.2f} m"],
+        ["Fuente Mr subrasante", str(payload.get("subgrade", {}).get("mr_source", ""))],
+        ["E* mezcla asfáltica", f"{materials.get('asphalt_dynamic_modulus_mpa',0):,.0f} MPa"],
+        ["Confiabilidad", f"{reliability.get('reliability_pct',0):.1f}%"],
+        ["Cribado εt bajo carpeta", f"{mechanistic.get('asphalt_tensile_microstrain_screening',0):.0f} µε"],
+        ["Cribado εv sobre subrasante", f"{mechanistic.get('subgrade_vertical_microstrain_screening',0):.0f} µε"],
+        ["Utilización fatiga / ahuellamiento", f"{mechanistic.get('fatigue_utilization_design', mechanistic.get('fatigue_utilization_ratio',0)):.2f} / {mechanistic.get('rutting_utilization_design', mechanistic.get('rutting_utilization_ratio',0)):.2f}"],
+        ["Transferencia - estado", str(payload.get('transfer_model',{}).get('calibration_status','No activado'))],
+        ["Tramos homogéneos", str(len(payload.get('homogeneous_segments',[])))],
+        ["Rehabilitación", "Sí" if payload.get('rehabilitation',{}).get('enabled') else "No"],
+        ["Candidatos de optimización", str(len(payload.get('optimization_candidates',[])))],
+        ["Clima - modo", str(climate.get("input_mode", ""))],
+        ["Clima - fuente", str(climate.get("source", ""))],
+        ["Clima - periodo", str(climate.get("period", ""))],
+        ["Clima - estación/zona", str(climate.get("station", ""))],
+        ["Temperatura aire representativa", f"{float(climate.get('air_c', 0)):.1f} °C"],
+    ]
+    if payload.get('selected'):
+        rows += [["Estructura", str(payload['selected'].get('Código',''))], ["Superficie", str(payload['selected'].get('Superficie',''))]]
+    asphalt_control = payload.get("asphalt_cr2020", payload.get("asphalt_cr2010", {}))
+    if asphalt_control:
+        rows += [
+            ["Control CR-2020 asfaltos", f"{asphalt_control.get('compliant', 0)}/{asphalt_control.get('total_applicable', 0)} controles"],
+            ["Cumplimiento CR-2020", f"{asphalt_control.get('compliance_pct', 0):.0f}%"],
+            ["No conformidades críticas", str(asphalt_control.get('critical_nonconformities', 0))],
+        ]
+    t=Table(rows, colWidths=[180,300]); t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#0f6fff')),('TEXTCOLOR',(0,0),(-1,0),colors.white),('GRID',(0,0),(-1,-1),0.5,colors.grey),('PADDING',(0,0),(-1,-1),7)])); story.append(t)
+    story.append(Spacer(1,14))
+    story.append(Paragraph("Advertencia: resultado preliminar sujeto a verificación profesional, caracterización de materiales, drenaje, control de calidad y aplicación integral del GDP-2024.", styles["Italic"]))
+    doc.build(story); return buff.getvalue()
+
+def build_geojson(project_name: str, start_lon: float, start_lat: float, end_lon: float, end_lat: float, properties: dict) -> bytes:
+    feature={"type":"Feature","properties":{"project":project_name,**properties},"geometry":{"type":"LineString","coordinates":[[start_lon,start_lat],[end_lon,end_lat]]}}
+    return json.dumps({"type":"FeatureCollection","features":[feature]}, ensure_ascii=False, indent=2).encode('utf-8')
+
+def build_civil3d_csv(start_e: float, start_n: float, azimuth_deg: float, length_m: float, interval_m: float, elevation: float) -> bytes:
+    rows=[]; az=math.radians(azimuth_deg); station=0.0; idx=1
+    while station <= length_m + 1e-9:
+        e=start_e + station*math.sin(az); n=start_n + station*math.cos(az)
+        rows.append([idx,e,n,elevation,f"EJE_{station:.2f}"]); station += interval_m; idx += 1
+    return pd.DataFrame(rows, columns=["Point","Easting","Northing","Elevation","Description"]).to_csv(index=False).encode('utf-8-sig')
+
+def build_section_dxf(selected: dict, width_m: float) -> bytes:
+    import ezdxf
+    doc=ezdxf.new('R2010'); msp=doc.modelspace(); y=0.0
+    layers=[]
+    surface=float(selected.get('Carpeta_cm',0)) or 2.0
+    layers=[('SUPERFICIE',surface),('BASE',float(selected.get('Base_cm',0))),('SUBBASE',float(selected.get('Subbase_cm',0)))]
+    for name,cm in layers:
+        h=cm/100.0; pts=[(-width_m/2,-y),(width_m/2,-y),(width_m/2,-y-h),(-width_m/2,-y-h)]
+        msp.add_lwpolyline(pts, close=True, dxfattribs={'layer':name}); msp.add_text(f"{name} {cm:.0f} cm", dxfattribs={'height':0.12}).set_placement((width_m/2+0.25,-y-h/2)); y += h
+    stream=io.StringIO(); doc.write(stream); return stream.getvalue().encode('utf-8')
+
+# -----------------------------
+# Web Ready: autenticación, usuarios y proyectos persistentes
+# -----------------------------
+AUTH_REQUIRED = os.getenv("GDP_AUTH_REQUIRED", "1").strip().lower() not in {"0", "false", "no"}
+ALLOW_REGISTRATION = os.getenv("GDP_ALLOW_REGISTRATION", "1").strip().lower() not in {"0", "false", "no"}
+PILOT_MODE = os.getenv("GDP_PILOT_MODE", "1").strip().lower() not in {"0", "false", "no"}
+
+def _capture_session_state():
+    state = {}
+    for key, value in st.session_state.items():
+        if is_ephemeral_state_key(key):
+            continue
+        # UploadedFile y objetos efímeros no deben persistirse.
+        if value.__class__.__name__ in {"UploadedFile", "UploadedFileRec"}:
+            continue
+        state[key] = value
+    return state
+
+
+def _restore_session_state(saved):
+    if not isinstance(saved, dict):
+        return
+    auth_user = st.session_state.get("auth_user")
+    for key in list(st.session_state.keys()):
+        if not is_active_control_key(key) and key != "auth_user":
+            try:
+                del st.session_state[key]
+            except Exception:
+                pass
+    for key, value in saved.items():
+        # También filtra claves heredadas de proyectos guardados antes de esta corrección.
+        if not is_ephemeral_state_key(key):
+            st.session_state[key] = value
+    if auth_user:
+        st.session_state.auth_user = auth_user
+
+
+def _auth_screen():
+    st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtle">Acceso multiusuario · proyectos persistentes · preparado para despliegue web.</div>', unsafe_allow_html=True)
+    left, center, right = st.columns([1, 1.2, 1])
+    with center:
+        view = st.radio("Acceso", ["Iniciar sesión", "Crear cuenta"], horizontal=True, label_visibility="collapsed") if ALLOW_REGISTRATION else "Iniciar sesión"
+        if view == "Iniciar sesión":
+            with st.form("login_form"):
+                username = st.text_input("Usuario", key="login_user")
+                password = st.text_input("Contraseña", type="password", key="login_password")
+                submit = st.form_submit_button("Ingresar", use_container_width=True)
+            if submit:
+                user = authenticate(username, password)
+                if user:
+                    st.session_state.auth_user = user
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+        else:
+            with st.form("registration_form"):
+                display = st.text_input("Nombre", key="reg_name")
+                username = st.text_input("Usuario", key="reg_user")
+                password = st.text_input("Contraseña (mínimo 8 caracteres)", type="password", key="reg_password")
+                submit = st.form_submit_button("Crear cuenta", use_container_width=True)
+            if submit:
+                ok, message = create_user(username, password, display)
+                if ok:
+                    st.success(message + " Ahora puede iniciar sesión.")
+                else:
+                    st.error(message)
+
+        if PILOT_MODE:
+            st.markdown("---")
+            st.caption("Piloto gratuito: puede entrar como invitado sin crear cuenta. Los datos del invitado no se guardan.")
+            if st.button("🚀 Continuar como invitado", use_container_width=True):
+                st.session_state.auth_user = {"id": 0, "username": "invitado", "display_name": "Usuario invitado"}
+                st.rerun()
+
+if AUTH_REQUIRED and "auth_user" not in st.session_state:
+    _auth_screen()
+    st.stop()
+
+if not AUTH_REQUIRED and "auth_user" not in st.session_state:
+    st.session_state.auth_user = {"id": 0, "username": "local", "display_name": "Usuario local"}
+
+# Estado
+if "catalog" not in st.session_state:
+    st.session_state.catalog = CATALOG_DEFAULT.copy()
+if "vehicles" not in st.session_state:
+    st.session_state.vehicles = VEHICLE_DEFAULTS.copy()
+
+st.markdown('<div class="main-title">🛣️ GDP Pavimentos Pro 2024 — v1.1.3 Piloto Cloud</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtle">Diseño flexible, visor estructural 3D v2 y gestión multiusuario · piloto gratuito para validación pública.</div>', unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("<div class='brand-box'><div class='brand-title'>🛣️ GDP PAVIMENTOS PRO 2024</div><div class='brand-sub'>Diseño conforme al GDP 2024</div></div>", unsafe_allow_html=True)
+    user = st.session_state.get("auth_user", {"id":0,"username":"local","display_name":"Usuario local"})
+    st.caption(f"👤 {user.get('display_name', user.get('username','Usuario'))}")
+    if AUTH_REQUIRED and st.button("Cerrar sesión", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+    st.markdown("### Mis proyectos")
+    projects = list_projects(int(user.get("id", 0))) if int(user.get("id",0)) > 0 else []
+    project_name_web = st.text_input("Nombre para guardar", value=st.session_state.get("project_save_name", "Proyecto GDP"), key="project_save_name")
+    if int(user.get("id",0)) > 0:
+        if st.button("💾 Guardar / actualizar proyecto", use_container_width=True):
+            if project_name_web.strip():
+                state_to_save = _capture_session_state()
+                save_project(int(user["id"]), project_name_web.strip(), state_to_save)
+                st.session_state._active_project_name = project_name_web.strip()
+                st.session_state._autosave_hash = project_state_fingerprint(state_to_save)
+                st.session_state._autosave_last_at = datetime.now().strftime("%H:%M:%S")
+                st.session_state._autosave_status = "saved"
+                st.success("Proyecto guardado.")
+                st.rerun()
+            else:
+                st.warning("Indique un nombre para el proyecto.")
+        if projects:
+            options = {f"{p['name']} · {p['updated_at']}": p for p in projects}
+            label = st.selectbox("Proyecto guardado", list(options.keys()), key="project_pick")
+            pinfo = options[label]
+            copen, cdel = st.columns(2)
+            with copen:
+                if st.button("📂 Abrir", use_container_width=True):
+                    saved = load_project(int(user["id"]), int(pinfo["id"]))
+                    if saved is not None:
+                        _restore_session_state(saved)
+                        st.session_state._active_project_name = pinfo["name"]
+                        st.session_state._autosave_hash = project_state_fingerprint(saved)
+                        st.session_state._autosave_status = "saved"
+                        st.session_state._loaded_project_notice = pinfo["name"]
+                        st.rerun()
+            with cdel:
+                if st.button("🗑️ Eliminar", use_container_width=True):
+                    delete_project(int(user["id"]), int(pinfo["id"]))
+                    if st.session_state.get("_active_project_name") == pinfo["name"]:
+                        st.session_state.pop("_active_project_name", None)
+                        st.session_state.pop("_autosave_hash", None)
+                    st.rerun()
+        else:
+            st.caption("Aún no hay proyectos guardados.")
+    else:
+        st.info("Modo invitado: puede usar todos los cálculos, pero este proyecto no se guardará de forma permanente.")
+    if st.session_state.pop("_loaded_project_notice", None):
+        st.success("Proyecto cargado correctamente.")
+    st.markdown("---")
+    st.markdown("### Navegación")
+    st.caption("Complete las pestañas y consulte el Dashboard para el resumen general.")
+    st.markdown("---")
+    st.markdown("### Calidad visual 3D")
+    st.selectbox("Nivel de detalle", ["Media", "Alta", "Ultra"], index=1, key="render_quality", help="Ultra mejora la textura, pero requiere más capacidad gráfica.")
+    st.toggle("Rotación automática al abrir", value=True, key="auto_rotate_3d", help="El modelo gira lentamente. También puede pausarlo o reanudarlo dentro del visor 3D.")
+    st.markdown("### Configuración normativa")
+    st.success("Tomo II usa el catálogo oficial GDP-2024 integrado y trazable. No requiere cargar CSV externos.")
+    st.caption("Las alternativas se seleccionan desde las Tablas 301-01 a 301-21 según TPD, porcentaje de pesados, CBR y período de diseño. Los períodos no tabulados no se interpolan.")
+    st.download_button(
+        "Descargar catálogo histórico (solo referencia)",
+        data=CATALOG_DEFAULT.to_csv(index=False).encode("utf-8-sig"),
+        file_name="catalogo_historico_no_normativo.csv",
+        mime="text/csv",
+        help="Archivo heredado conservado únicamente para compatibilidad y referencia; no alimenta la selección oficial del Tomo II.",
+    )
+
+# Acceso visible a cuenta y proyectos, aun cuando la barra lateral se haya colapsado manualmente.
+st.markdown("### 👤 Cuenta y proyectos")
+if int(user.get("id", 0)) > 0:
+    account_col, save_name_col, save_col = st.columns([2.2, 1.3, 1])
+    with account_col:
+        st.success(
+            f"Sesión iniciada como **{user.get('display_name', user.get('username', 'Usuario'))}**. "
+            "Desde este panel puede guardar, buscar y abrir sus proyectos sin usar la barra lateral."
+        )
+        active_autosave_name = st.session_state.get("_active_project_name")
+        if active_autosave_name:
+            last_autosave = st.session_state.get("_autosave_last_at", "esta sesión")
+            if st.session_state.get("_autosave_status") == "error":
+                st.error(f"Guardado automático pendiente para **{active_autosave_name}**.")
+            else:
+                st.caption(f"☁️ Guardado automático activo: **{active_autosave_name}** · último guardado {last_autosave}")
+        else:
+            st.caption("El guardado automático se activará después del primer guardado manual o al abrir un proyecto.")
+    with save_name_col:
+        project_name_main = st.text_input(
+            "Nombre para guardar",
+            value=st.session_state.get("main_project_save_name", project_name_web or "Proyecto GDP"),
+            key="main_project_save_name",
+        )
+    with save_col:
+        st.write("")
+        if st.button("💾 Guardar proyecto ahora", use_container_width=True, key="main_save_project"):
+            if project_name_main.strip():
+                state_to_save = _capture_session_state()
+                save_project(int(user["id"]), project_name_main.strip(), state_to_save)
+                st.session_state._active_project_name = project_name_main.strip()
+                st.session_state._autosave_hash = project_state_fingerprint(state_to_save)
+                st.session_state._autosave_last_at = datetime.now().strftime("%H:%M:%S")
+                st.session_state._autosave_status = "saved"
+                st.success("Proyecto guardado correctamente.")
+                st.rerun()
+            else:
+                st.warning("Indique un nombre para el proyecto.")
+
+    st.markdown("#### 📂 Mis proyectos guardados")
+    if projects:
+        search_col, project_col = st.columns([1, 2])
+        with search_col:
+            project_search = st.text_input(
+                "Buscar por nombre",
+                placeholder="Escriba parte del nombre",
+                key="main_project_search",
+            )
+        filtered_projects = [
+            project for project in projects
+            if project_search.strip().casefold() in str(project["name"]).casefold()
+        ]
+        if filtered_projects:
+            main_options = {
+                f"{project['name']} · actualizado {project['updated_at']}": project
+                for project in filtered_projects
+            }
+            with project_col:
+                selected_project_label = st.selectbox(
+                    "Proyecto guardado",
+                    list(main_options.keys()),
+                    key="main_project_pick",
+                )
+            selected_project = main_options[selected_project_label]
+            st.caption(
+                f"Última actualización: {selected_project['updated_at']} · "
+                f"Creado: {selected_project['created_at']}"
+            )
+            open_col, confirm_col, delete_col = st.columns([1, 1.5, 1])
+            with open_col:
+                if st.button("📂 Abrir proyecto", use_container_width=True, key="main_open_project"):
+                    saved = load_project(int(user["id"]), int(selected_project["id"]))
+                    if saved is not None:
+                        _restore_session_state(saved)
+                        st.session_state._active_project_name = selected_project["name"]
+                        st.session_state._autosave_hash = project_state_fingerprint(saved)
+                        st.session_state._autosave_status = "saved"
+                        st.session_state._loaded_project_notice = selected_project["name"]
+                        st.rerun()
+                    else:
+                        st.error("No fue posible recuperar el proyecto seleccionado.")
+            with confirm_col:
+                confirm_main_delete = st.checkbox(
+                    "Confirmar eliminación",
+                    key="main_confirm_delete_project",
+                )
+            with delete_col:
+                if st.button(
+                    "🗑️ Eliminar proyecto",
+                    use_container_width=True,
+                    disabled=not confirm_main_delete,
+                    key="main_delete_project",
+                ):
+                    delete_project(int(user["id"]), int(selected_project["id"]))
+                    if st.session_state.get("_active_project_name") == selected_project["name"]:
+                        st.session_state.pop("_active_project_name", None)
+                        st.session_state.pop("_autosave_hash", None)
+                    st.success(f"Proyecto “{selected_project['name']}” eliminado.")
+                    st.rerun()
+        else:
+            st.info("No se encontraron proyectos que coincidan con la búsqueda.")
+    else:
+        st.info("Aún no hay proyectos guardados para esta cuenta.")
+else:
+    guest_col, login_col = st.columns([3, 1])
+    with guest_col:
+        st.warning(
+            "Está usando GDP Pavimentos Pro como **invitado**. Puede realizar cálculos, pero los proyectos no se guardan permanentemente. "
+            "Inicie sesión o cree una cuenta para activar **Mis proyectos**."
+        )
+    with login_col:
+        if st.button("🔐 Iniciar sesión / Crear cuenta", use_container_width=True, key="main_login_from_guest"):
+            st.session_state.clear()
+            st.rerun()
+
+# Selector principal de metodología
+if "active_tomo" not in st.session_state:
+    st.session_state.active_tomo = "Tomo II"
+
+head_left, head_mid, head_right = st.columns([1.2, 2.2, 1.2])
+with head_left:
+    active_tomo = st.segmented_control(
+        "Normativa activa", ["Tomo I", "Tomo II"],
+        default=st.session_state.active_tomo, key="tomo_selector"
+    ) or st.session_state.active_tomo
+    st.session_state.active_tomo = active_tomo
+with head_mid:
+    if active_tomo == "Tomo II":
+        st.markdown('<div class="mode-card">📘 <b>Tomo activo: II — Catálogo simplificado</b><br><span style="font-weight:500">Selección de estructuras para vías de bajo volumen.</span></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="mode-card">📗 <b>Tomo activo: I — Diseño mecanístico-empírico</b><br><span style="font-weight:500">Evaluación preliminar de pavimentos flexibles y semirrígidos.</span></div>', unsafe_allow_html=True)
+with head_right:
+    st.caption("Cambie de tomo en cualquier momento. Los datos del proyecto permanecen en la sesión.")
+
+# Valores compartidos entre módulos
+selected_row = st.session_state.get("selected_row")
+total_thickness = float(st.session_state.get("total_thickness", 0.0))
+exact_match = bool(st.session_state.get("exact_match", False))
+
+# Pestañas
+st.markdown("""
+<div style="background:#123b5d;color:white;padding:12px 18px;border-radius:10px;margin-bottom:14px;font-weight:700;">
+GDP Pavimentos Pro 2024 — versión 1.1 · Web Ready Multiusuario
+</div>
+""", unsafe_allow_html=True)
+
+pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6 = st.tabs([
+    "🏠 Dashboard", "1. Proyecto", "2. Tránsito", "3. Subrasante", "4. Clima", "5. Estructura",
+    "6. Diseño flexible", "7. Desempeño", "8. Comparación", "9. Costos", "10. Ciclo de vida", "11. Drenaje", "12. Validación", "13. Control CR-2020", "14. Exportación", "15. Informe"
+])
+
+with p1:
+    c1, c2 = st.columns(2)
+    with c1:
+        project_name = st.text_input("Nombre del proyecto", "Proyecto vial")
+        location = st.text_input("Ubicación", "Costa Rica")
+        engineer = st.text_input("Profesional responsable", "")
+    with c2:
+        project_date = st.date_input("Fecha", date.today())
+        road_type = st.selectbox("Tipo de vía", ["Camino de bajo volumen", "Urbanización", "Vía local", "Otro"])
+        pavement_type = st.selectbox("Tipo de pavimento", ["Flexible", "Semirrígido", "Por definir"])
+
+    # DESIGN_DATA_PHASE1
+    st.markdown("### Geometría y configuración funcional del tramo")
+    g1, g2, g3, g4 = st.columns(4)
+    project_length_m = g1.number_input("Longitud de diseño (m)", min_value=1.0, value=150.0, step=10.0, key="project_design_length")
+    lane_width_m = g2.number_input("Ancho de carril (m)", min_value=2.0, max_value=6.0, value=3.0, step=0.1, key="project_lane_width")
+    number_lanes = g3.number_input("Número de carriles", min_value=1, max_value=12, value=2, step=1, key="project_number_lanes")
+    traffic_directions = g4.selectbox("Sentidos de circulación", ["Dos sentidos", "Un sentido"], key="project_traffic_directions")
+    g5, g6, g7, g8 = st.columns(4)
+    shoulder_width_m = g5.number_input("Espaldón por lado (m)", min_value=0.0, max_value=5.0, value=0.0, step=0.25, key="project_shoulder_width")
+    project_cross_slope_pct = g6.number_input("Pendiente transversal (%)", min_value=0.0, max_value=15.0, value=2.0, step=0.1, key="project_cross_slope")
+    project_long_slope_pct = g7.number_input("Pendiente longitudinal media (%)", min_value=-20.0, max_value=20.0, value=0.0, step=0.1, key="project_long_slope")
+    functional_class = g8.selectbox("Condición funcional", ["Nueva construcción", "Reconstrucción", "Rehabilitación", "Evaluación preliminar"], key="project_functional_condition")
+    project_width_m = float(lane_width_m) * int(number_lanes) + 2.0 * float(shoulder_width_m)
+    st.caption(f"Ancho geométrico de referencia calculado: {project_width_m:.2f} m. Estos datos se usan como trazabilidad y como valores iniciales en costos/exportación.")
+
+    if functional_class == "Rehabilitación":
+        st.markdown("### Diagnóstico del pavimento existente — rehabilitación")
+        st.warning("Este bloque documenta condición y auscultación. No calcula capacidad residual definitiva hasta incorporar/validar el procedimiento de retrocálculo correspondiente.")
+        rh1, rh2, rh3, rh4 = st.columns(4)
+        existing_age = rh1.number_input("Edad del pavimento existente (años)", min_value=0.0, max_value=100.0, value=10.0, step=1.0, key="rehab_age")
+        existing_pci = rh2.number_input("PCI observado", min_value=0.0, max_value=100.0, value=65.0, step=1.0, key="rehab_pci")
+        existing_iri = rh3.number_input("IRI observado (m/km)", min_value=0.0, max_value=20.0, value=3.0, step=0.1, key="rehab_iri")
+        existing_rut = rh4.number_input("Ahuellamiento observado (mm)", min_value=0.0, max_value=100.0, value=10.0, step=1.0, key="rehab_rut")
+        rh5, rh6, rh7, rh8 = st.columns(4)
+        existing_ac = rh5.number_input("Carpeta existente (cm)", min_value=0.0, max_value=100.0, value=8.0, step=1.0, key="rehab_ac")
+        existing_base = rh6.number_input("Base existente (cm)", min_value=0.0, max_value=150.0, value=20.0, step=1.0, key="rehab_base")
+        fwd_d0 = rh7.number_input("FWD D0 (µm, 0 = no disponible)", min_value=0.0, max_value=5000.0, value=0.0, step=10.0, key="rehab_fwd_d0")
+        fwd_d600 = rh8.number_input("FWD D600 (µm, 0 = no disponible)", min_value=0.0, max_value=5000.0, value=0.0, step=10.0, key="rehab_fwd_d600")
+        rehab_notes = st.text_area("Patologías, reparaciones previas y observaciones", value="", height=80, key="rehab_notes")
+        st.session_state.rehabilitation = {
+            'enabled': True, 'age_years': existing_age, 'pci': existing_pci, 'iri_m_km': existing_iri,
+            'rutting_mm': existing_rut, 'existing_asphalt_cm': existing_ac, 'existing_base_cm': existing_base,
+            'fwd_d0_um': fwd_d0, 'fwd_d600_um': fwd_d600, 'notes': rehab_notes,
+            'backcalculation_status': 'Pendiente de módulo específico' if fwd_d0 > 0 else 'Sin datos FWD',
+        }
+        if existing_pci < 55:
+            st.error("PCI bajo: la alternativa de rehabilitación debe considerar reparación estructural/rehabilitación mayor antes de aceptar un simple refuerzo.")
+        elif existing_pci < 70:
+            st.warning("PCI intermedio: revise fallas estructurales, drenaje y deflexiones antes de definir el tratamiento.")
+    else:
+        st.session_state.rehabilitation = {'enabled': False}
+
+    st.session_state.project_geometry = {
+        "length_m": float(project_length_m), "lane_width_m": float(lane_width_m),
+        "number_lanes": int(number_lanes), "traffic_directions": traffic_directions,
+        "shoulder_width_m": float(shoulder_width_m), "paved_reference_width_m": float(project_width_m),
+        "cross_slope_pct": float(project_cross_slope_pct), "longitudinal_slope_pct": float(project_long_slope_pct),
+        "functional_condition": functional_class,
+    }
+
+    st.markdown("### Ubicación geográfica y conversión de coordenadas")
+    st.caption("CRTM05 se procesa como EPSG:5367 y WGS84 como EPSG:4326 mediante PROJ/pyproj. La conversión se actualiza automáticamente al cambiar los valores.")
+    coordinate_system = st.segmented_control(
+        "Sistema de coordenadas de entrada",
+        ["CRTM05 (EPSG:5367)", "WGS84 (EPSG:4326)"],
+        default="CRTM05 (EPSG:5367)",
+        key="project_coordinate_system",
+    ) or "CRTM05 (EPSG:5367)"
+
+    if coordinate_system.startswith("CRTM05"):
+        gc1, gc2 = st.columns(2)
+        crtm_easting = gc1.number_input(
+            "Este CRTM05 (m)", value=500000.0, step=1.0, format="%.3f", key="project_crtm_easting"
+        )
+        crtm_northing = gc2.number_input(
+            "Norte CRTM05 (m)", value=1100000.0, step=1.0, format="%.3f", key="project_crtm_northing"
+        )
+        longitude, latitude = crtm05_to_wgs84(crtm_easting, crtm_northing)
+        st.success(
+            f"Conversión automática CRTM05 → WGS84: Latitud **{latitude:.7f}°**, Longitud **{longitude:.7f}°**"
+        )
+    else:
+        gc1, gc2 = st.columns(2)
+        latitude = gc1.number_input(
+            "Latitud WGS84 (°)", min_value=-90.0, max_value=90.0, value=9.93, step=0.000001, format="%.7f", key="project_wgs84_latitude"
+        )
+        longitude = gc2.number_input(
+            "Longitud WGS84 (°)", min_value=-180.0, max_value=180.0, value=-84.10, step=0.000001, format="%.7f", key="project_wgs84_longitude"
+        )
+        crtm_easting, crtm_northing = wgs84_to_crtm05(longitude, latitude)
+        st.info(
+            f"Equivalente CRTM05 → Este **{crtm_easting:,.3f} m**, Norte **{crtm_northing:,.3f} m**"
+        )
+
+    if not is_plausible_costa_rica_wgs84(longitude, latitude):
+        st.warning("La coordenada convertida queda fuera del entorno geográfico amplio de Costa Rica. Revise sistema, Este/Norte o latitud/longitud antes de continuar.")
+
+    # PROJECT_MAP_CONSOLIDATED
+    loc1, loc2, loc3, loc4 = st.columns(4)
+    loc1.metric("Este CRTM05", f"{crtm_easting:,.3f} m")
+    loc2.metric("Norte CRTM05", f"{crtm_northing:,.3f} m")
+    loc3.metric("Latitud WGS84", f"{latitude:.7f}°")
+    loc4.metric("Longitud WGS84", f"{longitude:.7f}°")
+
+    # PROJECT_MAP_GEOMETRY_MODE
+    st.markdown("#### Mapa e inventario geográfico del proyecto")
+    st.caption("Defina la geometría principal como un punto único o como un tramo entre dos puntos. El mapa permite zoom con la rueda del mouse.")
+
+    geometry_mode = st.segmented_control(
+        "Geometría principal del proyecto",
+        ["Punto único", "Tramo (inicio–fin)"],
+        default=st.session_state.get("project_map_geometry_mode", "Punto único"),
+        key="project_map_geometry_mode",
+    ) or "Punto único"
+
+    main_project_line = []
+    alignment_mode = "Línea directa"
+    if geometry_mode == "Punto único":
+        base_geo_points = pd.DataFrame([{
+            "Nombre": "Punto principal",
+            "Tipo": "Proyecto",
+            "Sistema": "WGS84",
+            "Este_CRTM05": float(crtm_easting),
+            "Norte_CRTM05": float(crtm_northing),
+            "Latitud": float(latitude),
+            "Longitud": float(longitude),
+            "Descripción": str(location),
+        }])
+    else:
+        st.markdown("##### Coordenadas del tramo")
+        segment_system = st.segmented_control(
+            "Sistema para inicio y fin", ["WGS84", "CRTM05"],
+            default=st.session_state.get("project_segment_system", "WGS84"),
+            key="project_segment_system",
+        ) or "WGS84"
+        if segment_system == "WGS84":
+            sg1, sg2, sg3, sg4 = st.columns(4)
+            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(st.session_state.get("project_segment_start_lat", latitude)), format="%.7f", key="project_segment_start_lat")
+            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(st.session_state.get("project_segment_start_lon", longitude)), format="%.7f", key="project_segment_start_lon")
+            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(st.session_state.get("project_segment_end_lat", latitude)), format="%.7f", key="project_segment_end_lat")
+            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(st.session_state.get("project_segment_end_lon", longitude)), format="%.7f", key="project_segment_end_lon")
+            start_e, start_n = wgs84_to_crtm05(start_lon, start_lat)
+            end_e, end_n = wgs84_to_crtm05(end_lon, end_lat)
+        else:
+            sg1, sg2, sg3, sg4 = st.columns(4)
+            start_e = sg1.number_input("Este inicial CRTM05", value=float(st.session_state.get("project_segment_start_e", crtm_easting)), format="%.3f", key="project_segment_start_e")
+            start_n = sg2.number_input("Norte inicial CRTM05", value=float(st.session_state.get("project_segment_start_n", crtm_northing)), format="%.3f", key="project_segment_start_n")
+            end_e = sg3.number_input("Este final CRTM05", value=float(st.session_state.get("project_segment_end_e", crtm_easting)), format="%.3f", key="project_segment_end_e")
+            end_n = sg4.number_input("Norte final CRTM05", value=float(st.session_state.get("project_segment_end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
+            start_lon, start_lat = crtm05_to_wgs84(start_e, start_n)
+            end_lon, end_lat = crtm05_to_wgs84(end_e, end_n)
+
+        alignment_mode = st.radio(
+            "Trazado del eje",
+            ["Ajustar a carretera (automático)", "Puntos manuales", "Línea directa"],
+            horizontal=True,
+            key="project_road_alignment_mode",
+            help="El ajuste automático consulta la red vial de OpenStreetMap. Los vértices manuales sirven como puntos de paso y como alternativa sin conexión.",
+        )
+        st.caption(
+            "Para guiar el recorrido por una carretera específica, agregue filas de tipo "
+            "**Vértice de eje** en el orden de avance entre el inicio y el fin."
+        )
+
+        base_geo_points = pd.DataFrame([
+            {"Nombre":"Inicio del tramo","Tipo":"Inicio","Sistema":"WGS84","Este_CRTM05":float(start_e),"Norte_CRTM05":float(start_n),"Latitud":float(start_lat),"Longitud":float(start_lon),"Descripción":str(location)},
+            {"Nombre":"Fin del tramo","Tipo":"Fin","Sistema":"WGS84","Este_CRTM05":float(end_e),"Norte_CRTM05":float(end_n),"Latitud":float(end_lat),"Longitud":float(end_lon),"Descripción":str(location)},
+        ])
+        if is_plausible_costa_rica_wgs84(start_lon, start_lat) and is_plausible_costa_rica_wgs84(end_lon, end_lat):
+            main_project_line = [{
+                "name": "Tramo principal",
+                "description": str(location),
+                "coordinates": [(float(start_lon), float(start_lat)), (float(end_lon), float(end_lat))],
+            }]
+        else:
+            st.warning("Alguno de los extremos del tramo queda fuera del entorno esperado de Costa Rica. Revise las coordenadas.")
+    saved_geo = st.session_state.get("project_geo_points_input")
+    if isinstance(saved_geo, pd.DataFrame) and not saved_geo.empty:
+        geo_editor_seed = saved_geo.copy()
+        if geometry_mode == "Punto único":
+            main_mask = geo_editor_seed["Tipo"].astype(str).eq("Proyecto") if "Tipo" in geo_editor_seed.columns else pd.Series(False, index=geo_editor_seed.index)
+            if main_mask.any():
+                idx = geo_editor_seed.index[main_mask][0]
+                geo_editor_seed.loc[idx, ["Sistema", "Este_CRTM05", "Norte_CRTM05", "Latitud", "Longitud", "Descripción"]] = [
+                    "WGS84", float(crtm_easting), float(crtm_northing), float(latitude), float(longitude), str(location)
+                ]
+            else:
+                geo_editor_seed = pd.concat([base_geo_points, geo_editor_seed], ignore_index=True)
+        else:
+            keep_extra = geo_editor_seed[~geo_editor_seed["Tipo"].astype(str).isin(["Proyecto", "Inicio", "Fin"])].copy() if "Tipo" in geo_editor_seed.columns else pd.DataFrame()
+            geo_editor_seed = pd.concat([base_geo_points, keep_extra], ignore_index=True)
+    else:
+        geo_editor_seed = base_geo_points
+
+    with st.expander("Agregar / editar puntos del proyecto", expanded=False):
+        geo_points_input = st.data_editor(
+            geo_editor_seed, num_rows="dynamic", use_container_width=True, hide_index=True,
+            key="project_geo_points_editor",
+            column_config={
+                "Nombre": st.column_config.TextColumn("Nombre / código"),
+                "Tipo": st.column_config.SelectboxColumn("Tipo", options=["Proyecto", "Inicio", "Vértice de eje", "Fin", "Sondeo P1", "Sondeo P2", "Sondeo", "Puente", "Alcantarilla", "Intersección", "Acceso", "Otro"]),
+                "Sistema": st.column_config.SelectboxColumn("Sistema", options=["WGS84", "CRTM05"]),
+                "Este_CRTM05": st.column_config.NumberColumn("Este CRTM05", format="%.3f"),
+                "Norte_CRTM05": st.column_config.NumberColumn("Norte CRTM05", format="%.3f"),
+                "Latitud": st.column_config.NumberColumn("Latitud", format="%.7f"),
+                "Longitud": st.column_config.NumberColumn("Longitud", format="%.7f"),
+                "Descripción": st.column_config.TextColumn("Descripción"),
+            },
+        )
+    st.session_state.project_geo_points_input = geo_points_input.copy()
+
+    resolved_geo_points = []
+    for _, row in geo_points_input.iterrows():
+        pname = str(row.get("Nombre", "")).strip() or "Punto"
+        ptype = str(row.get("Tipo", "Otro")).strip() or "Otro"
+        psystem = str(row.get("Sistema", "WGS84")).strip() or "WGS84"
+        pdesc = str(row.get("Descripción", "") or "")
+        try:
+            if psystem == "CRTM05":
+                pe = float(row.get("Este_CRTM05", 0) or 0)
+                pn = float(row.get("Norte_CRTM05", 0) or 0)
+                plon, plat = crtm05_to_wgs84(pe, pn)
+            else:
+                plat = float(row.get("Latitud", 0) or 0)
+                plon = float(row.get("Longitud", 0) or 0)
+                pe, pn = wgs84_to_crtm05(plon, plat)
+            # FIX_PROJECT_MAP_PVALID_COLLISION
+            point_is_valid = bool(is_plausible_costa_rica_wgs84(plon, plat))
+        except Exception:
+            pe = pn = plat = plon = 0.0
+            point_is_valid = False
+        resolved_geo_points.append({
+            "name": pname, "type": ptype, "system_input": psystem, "description": pdesc,
+            "crtm_easting": float(pe), "crtm_northing": float(pn),
+            "latitude": float(plat), "longitude": float(plon), "valid": point_is_valid,
+        })
+
+    valid_geo_points = [p for p in resolved_geo_points if p["valid"]]
+    if geometry_mode == "Tramo (inicio–fin)" and main_project_line:
+        manual_vertices = [
+            (p["longitude"], p["latitude"])
+            for p in valid_geo_points if p["type"] == "Vértice de eje"
+        ]
+        waypoints = [(float(start_lon), float(start_lat)), *manual_vertices, (float(end_lon), float(end_lat))]
+        if alignment_mode == "Ajustar a carretera (automático)":
+            try:
+                aligned_route = cached_road_route(tuple(waypoints))
+                main_project_line = [{
+                    "name": "Tramo ajustado a carretera",
+                    "description": f"Ruta vial OpenStreetMap/OSRM · {aligned_route.distance_m:,.1f} m",
+                    "coordinates": list(aligned_route.coordinates),
+                }]
+                st.success(
+                    f"Eje ajustado a la red vial: {aligned_route.distance_m:,.1f} m "
+                    f"y {len(aligned_route.coordinates)} vértices."
+                )
+            except (RoadAlignmentError, ValueError) as exc:
+                main_project_line[0]["coordinates"] = waypoints
+                st.warning(
+                    f"No fue posible ajustar automáticamente el eje ({exc}). "
+                    "Se muestra la polilínea definida por los puntos manuales."
+                )
+        elif alignment_mode == "Puntos manuales":
+            main_project_line[0]["name"] = "Tramo por puntos manuales"
+            main_project_line[0]["coordinates"] = waypoints
+            if not manual_vertices:
+                st.info("Agregue puntos de tipo “Vértice de eje” para seguir las curvas de la carretera.")
+
+    fig_project_map = go.Figure()
+    type_symbols = {
+        "Proyecto": "circle", "Inicio": "triangle", "Fin": "triangle",
+        "Sondeo P1": "diamond", "Sondeo P2": "diamond", "Sondeo": "diamond",
+        "Puente": "square", "Alcantarilla": "square", "Intersección": "circle",
+        "Acceso": "circle", "Otro": "circle",
+    }
+    if valid_geo_points:
+        for ptype in sorted({p["type"] for p in valid_geo_points}):
+            pts = [p for p in valid_geo_points if p["type"] == ptype]
+            fig_project_map.add_trace(go.Scattermapbox(
+                lat=[p["latitude"] for p in pts],
+                lon=[p["longitude"] for p in pts],
+                mode="markers+text",
+                text=[p["name"] for p in pts],
+                textposition="top right",
+                name=ptype,
+                marker=dict(size=13, symbol=type_symbols.get(ptype, "circle")),
+                customdata=[[p["crtm_easting"], p["crtm_northing"], p["description"]] for p in pts],
+                hovertemplate="<b>%{text}</b><br>Este: %{customdata[0]:,.3f} m<br>Norte: %{customdata[1]:,.3f} m<br>Lat: %{lat:.7f}<br>Lon: %{lon:.7f}<br>%{customdata[2]}<extra></extra>",
+            ))
+        center_lat = sum(p["latitude"] for p in valid_geo_points) / len(valid_geo_points)
+        center_lon = sum(p["longitude"] for p in valid_geo_points) / len(valid_geo_points)
+    else:
+        center_lat, center_lon = float(latitude), float(longitude)
+    if geometry_mode == "Tramo (inicio–fin)" and main_project_line:
+        line_coords = main_project_line[0]["coordinates"]
+        fig_project_map.add_trace(go.Scattermapbox(
+            lat=[point[1] for point in line_coords],
+            lon=[point[0] for point in line_coords],
+            mode="lines", name=main_project_line[0]["name"], line=dict(width=6, color="#ff7f9b"),
+            hovertemplate=f"<b>{main_project_line[0]['name']}</b><extra></extra>",
+        ))
+        center_lat = sum(point[1] for point in line_coords) / len(line_coords)
+        center_lon = sum(point[0] for point in line_coords) / len(line_coords)
+    fig_project_map.update_layout(
+        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=14),
+        height=500, margin=dict(l=0, r=0, t=10, b=0), legend=dict(orientation="h"),
+    )
+    st.plotly_chart(
+        fig_project_map, use_container_width=True,
+        config={"displaylogo": False, "scrollZoom": True, "responsive": True},
+    )
+    st.caption("Use la rueda del mouse sobre el mapa para acercar/alejar; arrastre para desplazarse.")
+
+    invalid_count = len(resolved_geo_points) - len(valid_geo_points)
+    if invalid_count:
+        st.warning(f"Hay {invalid_count} punto(s) con coordenadas inválidas o fuera del entorno esperado de Costa Rica; no se muestran en el mapa ni en el KML.")
+
+    map_actions_1, map_actions_2 = st.columns(2)
+    google_maps_url = f"https://www.google.com/maps/search/?api=1&query={float(latitude):.8f},{float(longitude):.8f}"
+    map_actions_1.link_button("🌎 Abrir punto principal en Google Maps", google_maps_url, use_container_width=True)
+    safe_project_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in str(project_name)).strip('_') or 'Proyecto_GDP'
+    project_kml = project_features_kml(project_name, resolved_geo_points, main_project_line)
+    map_actions_2.download_button(
+        "⬇️ Descargar puntos KML para Google Earth",
+        data=project_kml.encode("utf-8"),
+        file_name=f"{safe_project_name}_ubicacion.kml",
+        mime="application/vnd.google-earth.kml+xml",
+        use_container_width=True,
+    )
+
+    if valid_geo_points:
+        geo_summary = pd.DataFrame([{
+            "Elemento": p["name"], "Tipo": p["type"],
+            "Este CRTM05": p["crtm_easting"], "Norte CRTM05": p["crtm_northing"],
+            "Latitud": p["latitude"], "Longitud": p["longitude"],
+        } for p in valid_geo_points])
+        with st.expander("Ver ficha de coordenadas de todos los puntos", expanded=False):
+            st.dataframe(geo_summary, use_container_width=True, hide_index=True)
+
+    st.session_state.project_map = {
+        "latitude": float(latitude), "longitude": float(longitude),
+        "crtm_easting": float(crtm_easting), "crtm_northing": float(crtm_northing),
+        "google_maps_url": google_maps_url, "kml_filename": f"{safe_project_name}_ubicacion.kml",
+        "geometry_mode": geometry_mode, "alignment_mode": alignment_mode,
+        "points": resolved_geo_points, "lines": main_project_line,
+    }
+    st.caption("Las coordenadas y los puntos adicionales quedan incluidos en el estado guardado del proyecto y en las exportaciones. El mapa es una referencia geográfica; no sustituye levantamiento topográfico ni alineamiento GIS definitivo.")
+
+with p2:
+    st.subheader("Composición vehicular y factores camión")
+    st.info(
+        "Ingrese el conteo diario en la columna **Cantidad diaria (veh/día)**. "
+        "Se separan **automóviles**, **pickup/carga liviana** y **vehículos pesados**. "
+        "El **Factor camión** es un parámetro técnico independiente utilizado para convertir cada categoría a ejes equivalentes; para pickup/carga liviana debe usarse el valor documentado por el estudio o proyecto."
+    )
+
+    current = st.session_state.vehicles.copy()
+
+    # Compatibilidad con proyectos guardados antes de separar pickup/carga liviana.
+    if "Grupo de tránsito" not in current.columns:
+        current["Grupo de tránsito"] = current["Categoría"].astype(str).map(
+            lambda x: "Liviano" if x.strip().lower() == "vehículos livianos" else "Pesado"
+        )
+    current["Categoría"] = current["Categoría"].replace({"Vehículos livianos": "Automóviles / vehículos livianos"})
+    current.loc[current["Categoría"].eq("Automóviles / vehículos livianos"), "Grupo de tránsito"] = "Liviano"
+    if not current["Categoría"].astype(str).eq("Pickup / carga liviana").any():
+        pickup = pd.DataFrame([{
+            "Categoría": "Pickup / carga liviana",
+            "Grupo de tránsito": "Carga liviana",
+            "Factor camión": 0.0,
+            "TPD": 0,
+        }])
+        current = pd.concat([current.iloc[:1], pickup, current.iloc[1:]], ignore_index=True)
+    current.loc[current["Categoría"].eq("Pickup / carga liviana"), "Grupo de tránsito"] = "Carga liviana"
+
+    # VEHICLE_DECIMALS_AND_C4
+    # Compatibilidad con proyectos guardados antes de incorporar explícitamente la categoría C4.
+    if not current["Categoría"].astype(str).str.strip().eq("Camión C4").any():
+        c4 = pd.DataFrame([{
+            "Categoría": "Camión C4",
+            "Grupo de tránsito": "Pesado",
+            "Factor camión": 0.0,
+            "TPD": 0.0,
+        }])
+        c3_idx = current.index[current["Categoría"].astype(str).str.strip().eq("Camión C3")].tolist()
+        insert_at = c3_idx[0] + 1 if c3_idx else len(current)
+        current = pd.concat([current.iloc[:insert_at], c4, current.iloc[insert_at:]], ignore_index=True)
+    current.loc[current["Categoría"].eq("Camión C4"), "Grupo de tránsito"] = "Pesado"
+
+    vehicle_editor = current.rename(columns={"TPD": "Cantidad diaria (veh/día)"})[
+        ["Categoría", "Grupo de tránsito", "Cantidad diaria (veh/día)", "Factor camión"]
+    ]
+    vehicle_editor["Cantidad diaria (veh/día)"] = pd.to_numeric(
+        vehicle_editor["Cantidad diaria (veh/día)"], errors="coerce"
+    ).fillna(0.0).clip(lower=0.0).round(2)
+    vehicle_editor["Factor camión"] = pd.to_numeric(
+        vehicle_editor["Factor camión"], errors="coerce"
+    ).fillna(0.0)
+
+    edited_vehicles = st.data_editor(
+        vehicle_editor,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        key="vehicle_composition_editor",
+        column_config={
+            "Categoría": st.column_config.TextColumn(
+                "Categoría vehicular",
+                disabled=True,
+                help="Tipo de vehículo considerado en el aforo."
+            ),
+            "Grupo de tránsito": st.column_config.TextColumn(
+                "Grupo de tránsito",
+                disabled=True,
+                help="Clasificación usada para separar tránsito liviano, carga liviana y vehículos pesados. Solo el grupo Pesado entra en el porcentaje de pesados del Tomo II."
+            ),
+            "Cantidad diaria (veh/día)": st.column_config.NumberColumn(
+                "Cantidad diaria (veh/día)",
+                min_value=0.0,
+                max_value=1_000_000.0,
+                step=0.01,
+                format="%.2f",
+                help="Cantidad promedio de vehículos por día para esta categoría. Admite hasta 2 decimales."
+            ),
+            "Factor camión": st.column_config.NumberColumn(
+                "Factor camión",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.01,
+                format="%.4f",
+                help="Factor técnico usado para convertir el tránsito de la categoría a ejes equivalentes."
+            ),
+        },
+    )
+
+    edited_vehicles["Cantidad diaria (veh/día)"] = pd.to_numeric(
+        edited_vehicles["Cantidad diaria (veh/día)"], errors="coerce"
+    ).fillna(0.0).clip(lower=0.0).round(2)
+    edited_vehicles["Factor camión"] = pd.to_numeric(
+        edited_vehicles["Factor camión"], errors="coerce"
+    ).fillna(0.0).clip(lower=0.0)
+
+    vehicles = edited_vehicles.rename(columns={"Cantidad diaria (veh/día)": "TPD"})[
+        ["Categoría", "Grupo de tránsito", "Factor camión", "TPD"]
+    ]
+    st.session_state.vehicles = vehicles
+
+    with st.expander("¿Cuál es la diferencia entre cantidad diaria y factor camión?"):
+        st.markdown(
+            "- **Cantidad diaria (veh/día):** dato del conteo o aforo de tránsito.\n"
+            "- **Factor camión:** parámetro técnico de equivalencia de carga; no representa una cantidad de vehículos.\n"
+            "- **Grupo de tránsito:** controla la clasificación para el porcentaje de pesados del Tomo II. Pickup/carga liviana no se suma automáticamente como vehículo pesado.\n"
+            "- El cálculo de ejes equivalentes usa el factor individual de cada fila; no se asigna un factor normativo universal a pickup/carga liviana."
+        )
+
+    a, b, c, d = st.columns(4)
+    with a:
+        if st.session_state.active_tomo == "Tomo II":
+            years = st.selectbox(
+                "Periodo de diseño Tomo II (años)", [6, 8, 10, 12], index=2,
+                key="tomo2_design_period",
+                help="GDP-2024 Tomo II: selección directa de catálogo para 6, 8, 10 o 12 años, sin interpolación."
+            )
+        else:
+            years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=10, key="tomo1_design_period")
+    with b:
+        growth_pct = st.number_input("Crecimiento anual (%)", min_value=0.0, max_value=20.0, value=3.0, step=0.1)
+    with c:
+        direction_factor = st.number_input("Factor direccional", min_value=0.1, max_value=1.0, value=0.50, step=0.05)
+    with d:
+        lane_factor = st.number_input("Factor de carril", min_value=0.1, max_value=1.0, value=1.00, step=0.05)
+
+    weighted_daily = float((vehicles["TPD"] * vehicles["Factor camión"]).sum())
+    tpd_total = float(vehicles["TPD"].sum())
+    heavy_mask = vehicles["Grupo de tránsito"].astype(str).str.strip().str.lower().eq("pesado")
+    heavy_total = float(vehicles.loc[heavy_mask, "TPD"].sum())
+    heavy_pct = (heavy_total / tpd_total * 100.0) if tpd_total > 0 else 0.0
+    gf = growth_factor(growth_pct / 100.0, int(years))
+    esal = weighted_daily * direction_factor * lane_factor * 365 * gf
+    tclass = traffic_class(esal)
+    tomo1_category = tomo1_design_category(esal)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("TPD total", f"{tpd_total:,.2f}")
+    m2.metric("Vehículos pesados", f"{heavy_total:,.2f}", f"{heavy_pct:.2f}%")
+    m3.metric("Ejes equivalentes diarios", f"{weighted_daily:,.2f}")
+    m4.metric("Factor de crecimiento G", f"{gf:,.3f}")
+    m5.metric("EEq acumulado", f"{esal:,.0f}", "Dato complementario Tomo II" if st.session_state.active_tomo == "Tomo II" else f"Categoría {tomo1_category}")
+
+    if st.session_state.active_tomo == "Tomo II":
+        tomo2_tpd_category = classify_tpd(tpd_total)
+        tomo2_heavy_category = classify_heavy_pct(heavy_pct)
+        t21, t22, t23 = st.columns(3)
+        t21.metric("Categoría TPD — Tomo II", tomo2_tpd_category or "Fuera de alcance")
+        t22.metric("Categoría pesados — Tomo II", f"P{tomo2_heavy_category}%" if tomo2_heavy_category else "Fuera de alcance")
+        t23.metric("Periodo de catálogo", f"{int(years)} años")
+        if tomo2_tpd_category is None:
+            st.error("Tomo II: TPD fuera del alcance directo del catálogo (máximo 3500 veh/día en el motor normativo).")
+        if tomo2_heavy_category is None:
+            st.error("Tomo II: porcentaje de vehículos pesados fuera del alcance directo del catálogo (máximo 15%).")
+        st.info("En Tomo II, las categorías normativas visibles son TPD, porcentaje de pesados, CBR y período. La clase U1–T5 por ESAL no se usa para seleccionar el catálogo.")
+
+    if st.session_state.active_tomo == "Tomo I":
+        if tomo1_category == 3:
+            category_rule = "ESAL < 3 millones"
+        elif tomo1_category == 2:
+            category_rule = "3 millones ≤ ESAL ≤ 25 millones"
+        else:
+            category_rule = "ESAL > 25 millones"
+        st.success(
+            f"**Clasificación automática Tomo I: Categoría {tomo1_category}** · {category_rule}. "
+            "Referencia: GDP-2024 Tomo I, Tabla 102-01."
+        )
+
+    st.latex(r"EEq = 365 \cdot \left[\sum(TPD_i\,FC_i)\right] \cdot FD \cdot FCarril \cdot G, \qquad G=\frac{(1+r)^Y-1}{r}")
+    st.info(
+        f"**Factor de crecimiento acumulado G = {gf:,.3f}** · "
+        f"calculado con r = {growth_pct:.2f}% anual y Y = {int(years)} años. "
+        "G transforma el tránsito del año base en la acumulación equivalente durante el período de diseño."
+    )
+    st.caption("Cada cantidad corresponde al tránsito promedio diario de esa categoría. Revise cuidadosamente valores atípicos antes de continuar.")
+
+with p3:
+    st.subheader("Caracterización de la subrasante")
+    mode = st.radio("Entrada de CBR", ["Valor único", "Serie de ensayos"], horizontal=True)
+    if mode == "Valor único":
+        cbr_design = st.number_input("CBR de diseño (%)", min_value=0.1, max_value=100.0, value=5.0, step=0.1)
+        cbr_series = pd.DataFrame({"CBR (%)": [cbr_design]})
+    else:
+        cbr_series = st.data_editor(
+            pd.DataFrame({"CBR (%)": [4.2, 5.0, 5.6, 6.1, 4.8]}),
+            num_rows="dynamic",
+            use_container_width=True,
+            key="cbr_editor",
+        )
+        percentile = st.slider("Percentil conservador para diseño", 5, 50, 10, 5)
+        valid = pd.to_numeric(cbr_series["CBR (%)"], errors="coerce").dropna()
+        cbr_design = float(valid.quantile(percentile / 100.0)) if not valid.empty else 0.0
+
+    sclass = subgrade_class(cbr_design)
+    mr_estimated = resilient_modulus(cbr_design)
+    if st.session_state.active_tomo == "Tomo II":
+        tomo2_cbr_category = classify_cbr(cbr_design)
+        sgc1, sgc2 = st.columns(2)
+        sgc1.metric("Categoría normativa CBR — Tomo II", f"CBR {tomo2_cbr_category}%" if tomo2_cbr_category is not None else "Fuera de alcance")
+        sgc2.metric("Clase geotécnica auxiliar", sclass, help="S1–S4 se conserva para visualización y análisis interno; no sustituye la categoría CBR del catálogo Tomo II.")
+        if tomo2_cbr_category is None:
+            st.error("Tomo II: CBR < 3% queda fuera del alcance directo del catálogo.")
+        else:
+            st.info("Para la selección Tomo II se utiliza la categoría CBR 3/4/6/9/11 del motor normativo. S1–S4 es una clasificación auxiliar de la aplicación.")
+
+    st.markdown("#### Caracterización geotécnica complementaria")
+    sg1, sg2, sg3, sg4 = st.columns(4)
+    soil_sucs = sg1.text_input("Clasificación SUCS", value="", key="subgrade_sucs")
+    soil_aashto = sg2.text_input("Clasificación AASHTO", value="", key="subgrade_aashto")
+    liquid_limit = sg3.number_input("Límite líquido LL (%)", min_value=0.0, max_value=150.0, value=0.0, step=1.0, key="subgrade_ll")
+    plasticity_index = sg4.number_input("Índice plástico IP (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="subgrade_pi")
+    sg5, sg6, sg7, sg8 = st.columns(4)
+    natural_moisture = sg5.number_input("Humedad natural (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="subgrade_moisture")
+    max_dry_density = sg6.number_input("Densidad seca máxima (kg/m³)", min_value=0.0, max_value=3000.0, value=0.0, step=10.0, key="subgrade_mdd")
+    subgrade_water_table = sg7.number_input("Nivel freático investigado (m)", min_value=0.0, max_value=50.0, value=2.0, step=0.1, key="subgrade_water_table")
+    mr_source = sg8.selectbox("Fuente del módulo resiliente", ["Estimado a partir del CBR", "Ensayo de laboratorio/campo", "Valor documentado del proyecto"], key="subgrade_mr_source")
+    measured_mr = st.number_input("Módulo resiliente documentado Mr (MPa, 0 = usar estimación por CBR)", min_value=0.0, max_value=2000.0, value=0.0, step=1.0, key="subgrade_measured_mr")
+    mr = float(measured_mr) if measured_mr > 0 and mr_source != "Estimado a partir del CBR" else float(mr_estimated)
+
+    x1, x2, x3, x4 = st.columns(4)
+    x1.metric("CBR de diseño", f"{cbr_design:.2f}%")
+    x2.metric("Rango de subrasante", sclass)
+    x3.metric("Mr estimado por CBR", f"{mr_estimated:.2f} MPa")
+    x4.metric("Mr usado en diseño", f"{mr:.2f} MPa")
+    st.session_state.subgrade_details = {
+        "sucs": soil_sucs, "aashto": soil_aashto, "liquid_limit_pct": float(liquid_limit),
+        "plasticity_index_pct": float(plasticity_index), "natural_moisture_pct": float(natural_moisture),
+        "max_dry_density_kg_m3": float(max_dry_density), "water_table_m": float(subgrade_water_table),
+        "mr_estimated_mpa": float(mr_estimated), "mr_design_mpa": float(mr), "mr_source": mr_source,
+    }
+    if measured_mr <= 0 and mr_source != "Estimado a partir del CBR":
+        st.warning("Se indicó una fuente documentada de Mr, pero no se ingresó el valor. Se mantiene temporalmente la estimación por CBR.")
+
+    st.markdown("#### Segmentación preliminar en tramos homogéneos")
+    st.caption("Registre cambios de subrasante, tránsito relativo o zona climática. El agrupamiento es documental y de cribado; la delimitación final debe responder a la investigación de campo.")
+    default_segments = pd.DataFrame([{
+        'Tramo': 'TH-01', 'Inicio_m': 0.0, 'Fin_m': float(project_length_m), 'CBR_%': float(cbr_design),
+        'Mr_MPa': float(mr), 'Factor_tránsito': 1.0, 'Zona_climática': str(st.session_state.get('climate_zone_hint','General'))
+    }])
+    seg_df = st.data_editor(st.session_state.get('homogeneous_segments_input', default_segments), num_rows='dynamic', use_container_width=True, hide_index=True, key='homogeneous_segments_editor')
+    st.session_state.homogeneous_segments_input = seg_df.copy()
+    seg_work = seg_df.copy()
+    for col in ['Inicio_m','Fin_m','CBR_%','Mr_MPa','Factor_tránsito']:
+        if col in seg_work.columns:
+            seg_work[col] = pd.to_numeric(seg_work[col], errors='coerce').fillna(0.0)
+    if not seg_work.empty:
+        seg_work['Longitud_m'] = (seg_work['Fin_m'] - seg_work['Inicio_m']).clip(lower=0.0)
+        seg_work['ESAL_tramo'] = float(esal) * seg_work['Factor_tránsito'].clip(lower=0.0)
+        seg_work['Categoría_TomoI'] = seg_work['ESAL_tramo'].apply(lambda x: f"Categoría {tomo1_design_category(float(x))}")
+        seg_work['Clase_subrasante'] = seg_work['CBR_%'].apply(lambda x: subgrade_class(float(x)) if float(x) > 0 else 'Sin definir')
+        seg_work['Grupo_preliminar'] = seg_work.apply(lambda r: f"{r['Categoría_TomoI']} / {r['Clase_subrasante']} / {r.get('Zona_climática','')}", axis=1)
+        st.dataframe(seg_work, use_container_width=True, hide_index=True)
+        if (seg_work['Fin_m'] < seg_work['Inicio_m']).any():
+            st.error("Hay tramos con estación final menor que la inicial.")
+        if seg_work['Longitud_m'].sum() < float(project_length_m) * 0.95:
+            st.warning("La suma de longitudes de tramos no cubre toda la longitud del proyecto. Revise estaciones.")
+    st.session_state.homogeneous_segments = seg_work.to_dict(orient='records')
+
+    render_gdp_scope_alerts(st.session_state.active_tomo, tpd_total, heavy_pct, cbr_design, esal, int(years))
+
+    chart_df = cbr_series.copy()
+    chart_df.index = [f"Muestra {i+1}" for i in range(len(chart_df))]
+    st.bar_chart(chart_df)
+    st.caption("Clasificación implementada: S1 < 4; S2 = 4–6; S3 = 7–9; S4 > 9. Para el intervalo 6–7 se aplica el rango conservador inferior.")
+
+with pclima:
+    st.subheader("Temperatura del sitio y evaluación climática")
+    st.caption("Admite clima documentado por estación o una serie de 12 temperaturas medias mensuales. Las ecuaciones térmicas GDP existentes se aplican sin modificación.")
+
+    climate_input_mode = st.segmented_control(
+        "Modo de información climática",
+        ["Estación documentada", "Valores mensuales"],
+        default="Estación documentada",
+        key="climate_input_mode",
+    ) or "Estación documentada"
+
+    if "climate_station_selected" not in st.session_state:
+        st.session_state.climate_station_selected = "San José"
+        load_climate_zone_to_state()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        station_selected = st.selectbox(
+            "Estación o zona representativa",
+            CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"],
+            key="climate_station_selected",
+            on_change=load_climate_zone_to_state,
+        )
+        climate_source = st.text_input(
+            "Fuente / institución",
+            value=st.session_state.get("climate_source_input", "Fuente documentada por el usuario"),
+            key="climate_source_input",
+        )
+        climate_period = st.text_input(
+            "Periodo documentado",
+            value=st.session_state.get("climate_period_input", ""),
+            key="climate_period_input",
+        )
+    with c2:
+        depth_mm = st.number_input("Profundidad de evaluación en la mezcla (mm)", min_value=1.0, max_value=500.0, value=35.0, step=1.0, help="Se recomienda evaluar aproximadamente a la profundidad media de la capa asfáltica.")
+        analysis_category = tomo1_design_category(esal)
+        if st.session_state.active_tomo == "Tomo I":
+            st.metric(
+                "Categoría de análisis del Tomo I",
+                f"Categoría {analysis_category}",
+                help="Asignación automática según ESAL de diseño y Tabla 102-01 de la GDP-2024 Tomo I.",
+            )
+        else:
+            st.caption("La categoría jerárquica 1–3 corresponde al Tomo I y se calcula automáticamente a partir del ESAL.")
+    with c3:
+        temp_data_confirmed = st.checkbox("Fuente y periodo climático documentados", value=False)
+        master_curve_confirmed = st.checkbox("Curva maestra / módulos a varias temperaturas disponibles", value=False)
+        climate_notes = st.text_area("Notas de trazabilidad climática", value="", height=90)
+
+    climate_monthly_df = pd.DataFrame()
+    monthly_values = []
+    catalog = st.session_state.get("climate_catalog", {})
+    catalog_matches_zone = catalog.get("zone") == station_selected
+    if st.session_state.get("climate_catalog_status") == "error":
+        st.warning(
+            "No fue posible consultar NASA POWER. Puede continuar con datos propios. "
+            f"Detalle: {st.session_state.get('climate_catalog_error', 'sin respuesta')}"
+        )
+    elif station_selected == "Otra / dato propio":
+        st.info("Modo de dato propio: complete manualmente la fuente, el periodo y las temperaturas.")
+    elif catalog_matches_zone:
+        st.success(
+            f"Climatología cargada automáticamente para {station_selected}: "
+            f"{catalog['latitude']:.3f}, {catalog['longitude']:.3f}."
+        )
+
+    if climate_input_mode == "Valores mensuales":
+        st.markdown("#### Temperaturas medias mensuales del aire")
+        default_monthly = catalog.get("monthly_c", [23.0, 23.5, 24.0, 24.5, 24.0, 23.5, 23.5, 23.5, 23.5, 23.0, 22.8, 22.8])
+        monthly_input = pd.DataFrame({"Mes": MONTHS_ES, "Temperatura media del aire (°C)": default_monthly})
+        monthly_editor = st.data_editor(
+            monthly_input,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            key=f"climate_monthly_editor_{station_selected}",
+            column_config={
+                "Mes": st.column_config.TextColumn("Mes", disabled=True),
+                "Temperatura media del aire (°C)": st.column_config.NumberColumn(
+                    "Temperatura media del aire (°C)", min_value=-20.0, max_value=60.0, step=0.1, format="%.1f"
+                ),
+            },
+        )
+        monthly_values = pd.to_numeric(monthly_editor["Temperatura media del aire (°C)"], errors="coerce").fillna(0.0).tolist()
+        air_temp_c = representative_temperature(monthly_values)
+        monthly_modified = catalog_matches_zone and any(
+            abs(current - original) > 0.049
+            for current, original in zip(monthly_values, catalog.get("monthly_c", []))
+        )
+        st.caption(
+            "Origen: valores modificados por el usuario."
+            if monthly_modified else
+            "Origen: climatología automática NASA POWER; la tabla permanece editable."
+        )
+        climate_monthly_df = monthly_climate_table(monthly_values, latitude, depth_mm, pavement_temperature_ltpp, pavement_temperature_shrp)
+        summary = monthly_summary(climate_monthly_df)
+        st.dataframe(climate_monthly_df, use_container_width=True, hide_index=True)
+        st.line_chart(climate_monthly_df.set_index("Mes")[["Aire (°C)", "Pavimento LTPP (°C)", "Pavimento SHRP (°C)"]])
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Aire medio anual", f"{summary['air_mean_c']:.1f} °C")
+        s2.metric("Aire mínimo mensual", f"{summary['air_min_c']:.1f} °C")
+        s3.metric("Aire máximo mensual", f"{summary['air_max_c']:.1f} °C")
+        s4.metric("Rango mensual", f"{summary['air_max_c']-summary['air_min_c']:.1f} °C")
+    else:
+        air_temp_c = st.number_input(
+            "Temperatura representativa del aire (°C)",
+            min_value=-10.0,
+            max_value=50.0,
+            value=float(st.session_state.get("climate_air_temp_c", 24.0)),
+            step=0.1,
+            key="climate_air_temp_c",
+        )
+        air_modified = catalog_matches_zone and abs(air_temp_c - float(catalog.get("annual_c", air_temp_c))) > 0.049
+        st.info(
+            "Modo estación/zona: la temperatura media se cargó del catálogo y puede editarse. "
+            + ("El valor actual fue modificado por el usuario." if air_modified else "El valor actual coincide con el catálogo.")
+        )
+
+    tp_ltpp = pavement_temperature_ltpp(air_temp_c, latitude, depth_mm)
+    tp_shrp = pavement_temperature_shrp(air_temp_c, latitude, depth_mm)
+    pavement_temp_c = tp_ltpp
+    a1,a2,a3,a4=st.columns(4)
+    a1.metric("Temperatura representativa del aire", f"{air_temp_c:.1f} °C")
+    a2.metric("Pavimento — LTPP", f"{tp_ltpp:.1f} °C")
+    a3.metric("Pavimento — SHRP", f"{tp_shrp:.1f} °C")
+    a4.metric("Profundidad evaluada", f"{depth_mm:.0f} mm")
+
+    st.markdown("#### Trazabilidad climática")
+    st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
+
+    if st.session_state.active_tomo == "Tomo I":
+        st.markdown("#### Clasificación climática A / B — control documental")
+        st.warning("El repositorio oficial confirma el GDP-2024 Tomo I, pero la tabla/regla A-B exacta no está incorporada como evidencia textual en esta versión. Por seguridad, GDP Pavimentos Pro **no calcula A/B desde un umbral inventado** ni usa A/B para declarar conformidad.")
+        cl1, cl2, cl3 = st.columns(3)
+        climate_ab = cl1.selectbox("Clase climática documentada", ["Sin definir", "A", "B"], key='climate_ab_documented')
+        climate_ab_source = cl2.text_input("Tabla / sección / informe que respalda A/B", value="", key='climate_ab_source')
+        climate_ab_verified = cl3.checkbox("He verificado la clasificación contra el documento aplicable", value=False, key='climate_ab_verified')
+        climate_ab_ready = climate_ab in ("A", "B") and bool(climate_ab_source.strip()) and bool(climate_ab_verified)
+        if climate_ab_ready:
+            st.success(f"Clima {climate_ab} registrado como dato documentado · fuente: {climate_ab_source}")
+        else:
+            st.info("Clasificación A/B no habilitada como criterio de decisión. Complete clase, referencia y verificación documental.")
+
+        st.markdown("#### Curva maestra y ecuación de desplazamiento de la mezcla asfáltica en caliente")
+        st.caption("Modelo sigmoidal + desplazamiento WLF configurable. Los coeficientes deben provenir de ensayos/ajuste documentado; no se presentan como coeficientes universales GDP.")
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc_delta = mc1.number_input("δ — asíntota inferior log10(E*)", value=2.5, step=0.1, key='mc_delta')
+        mc_alpha = mc2.number_input("α — amplitud sigmoidal", value=2.0, step=0.1, key='mc_alpha')
+        mc_beta = mc3.number_input("β — parámetro sigmoidal", value=0.0, step=0.1, key='mc_beta')
+        mc_gamma = mc4.number_input("γ — pendiente sigmoidal", value=-1.0, step=0.1, key='mc_gamma')
+        sh1, sh2, sh3, sh4 = st.columns(4)
+        reference_temp_c = sh1.number_input("Temperatura de referencia Tref (°C)", min_value=-20.0, max_value=80.0, value=20.0, step=1.0, key='mc_tref')
+        analysis_frequency_hz = sh2.number_input("Frecuencia de carga f (Hz)", min_value=0.0001, max_value=1000.0, value=10.0, step=1.0, key='mc_frequency')
+        wlf_c1 = sh3.number_input("WLF C1", value=8.86, step=0.1, key='mc_wlf_c1')
+        wlf_c2 = sh4.number_input("WLF C2 (°C)", value=101.6, step=1.0, key='mc_wlf_c2')
+
+        log_a_t = wlf_log10_shift_factor(tp_ltpp, reference_temp_c, wlf_c1, wlf_c2)
+        a_t = 10.0 ** log_a_t
+        reduced_frequency_hz = max(float(analysis_frequency_hz) * a_t, 1e-12)
+        log_fr = math.log10(reduced_frequency_hz)
+        e_effective = master_curve_dynamic_modulus_mpa(log_fr, mc_delta, mc_alpha, mc_beta, mc_gamma)
+        st.latex(r"\log_{10}(a_T)=-\frac{C_1(T-T_{ref})}{C_2+(T-T_{ref})}")
+        st.latex(r"f_r=f\,a_T")
+        st.latex(r"\log_{10}(E^*)=\delta+\frac{\alpha}{1+\exp(\beta+\gamma\log_{10}f_r)}")
+        mcm1, mcm2, mcm3, mcm4 = st.columns(4)
+        mcm1.metric("log10(aT)", f"{log_a_t:.3f}")
+        mcm2.metric("aT", f"{a_t:.4g}")
+        mcm3.metric("Frecuencia reducida", f"{reduced_frequency_hz:.4g} Hz")
+        mcm4.metric("E* calculado", f"{e_effective:,.0f} MPa")
+
+        curve_logs = [(-4.0 + i * 0.2) for i in range(41)]
+        curve_df = pd.DataFrame({
+            'log10(f reducida)': curve_logs,
+            'Frecuencia reducida (Hz)': [10.0 ** x for x in curve_logs],
+            'E* (MPa)': [master_curve_dynamic_modulus_mpa(x, mc_delta, mc_alpha, mc_beta, mc_gamma) for x in curve_logs],
+        })
+        curve_fig = go.Figure(go.Scatter(x=curve_df['log10(f reducida)'], y=curve_df['E* (MPa)'], mode='lines+markers'))
+        curve_fig.update_layout(height=340, title='Curva maestra E* — modelo configurable', xaxis_title='log10 frecuencia reducida (Hz)', yaxis_title='E* (MPa)', plot_bgcolor='white', paper_bgcolor='white')
+        st.plotly_chart(curve_fig, use_container_width=True, config={'displaylogo': False})
+
+        temps_for_e = monthly_values if len(monthly_values) == 12 else [float(air_temp_c)] * 12
+        monthly_curve_rows = []
+        for month, temp_month in zip(MONTHS_ES, temps_for_e):
+            month_log_at = wlf_log10_shift_factor(float(temp_month), reference_temp_c, wlf_c1, wlf_c2)
+            month_at = 10.0 ** month_log_at
+            month_fr = max(float(analysis_frequency_hz) * month_at, 1e-12)
+            month_e = master_curve_dynamic_modulus_mpa(math.log10(month_fr), mc_delta, mc_alpha, mc_beta, mc_gamma)
+            monthly_curve_rows.append({'Mes': month, 'Temperatura (°C)': float(temp_month), 'log10(aT)': month_log_at, 'f reducida (Hz)': month_fr, 'E* calculado (MPa)': month_e})
+        e_monthly = pd.DataFrame(monthly_curve_rows)
+        st.dataframe(e_monthly, use_container_width=True, hide_index=True)
+        e_ref_state = float(st.session_state.get('design_materials', {}).get('asphalt_dynamic_modulus_mpa', 3500.0) or 3500.0)
+        climate_material_factor = float(e_monthly['E* calculado (MPa)'].mean()) / max(e_ref_state, 1e-9)
+        st.session_state.monthly_dynamic_modulus_input = e_monthly.copy()
+        st.session_state.climate_material = {
+            'climate_class_ab': climate_ab if climate_ab_ready else 'Sin definir', 'climate_ab_source': climate_ab_source,
+            'climate_ab_verified': bool(climate_ab_verified), 'climate_ab_normative_ready': bool(climate_ab_ready),
+            'monthly_modulus': e_monthly.to_dict(orient='records'), 'reference_modulus_mpa': e_ref_state,
+            'effective_modulus_mpa': float(e_effective), 'relative_climate_factor': float(climate_material_factor),
+            'shift_model': 'WLF configurable', 'master_curve_model': 'Sigmoidal configurable',
+            'master_curve_parameters': {'delta':mc_delta,'alpha':mc_alpha,'beta':mc_beta,'gamma':mc_gamma,'tref_c':reference_temp_c,'c1':wlf_c1,'c2':wlf_c2,'frequency_hz':analysis_frequency_hz},
+            'method': 'Curva maestra + WLF configurable; requiere coeficientes documentados'
+        }
+        if not master_curve_confirmed:
+            st.warning("La curva se calcula con parámetros configurables, pero el expediente aún indica que la curva maestra no está confirmada documentalmente.")
+
+    st.markdown("#### Alertas de cumplimiento y revisión")
+    climate_checks = climate_alerts(st.session_state.active_tomo, pavement_type, air_temp_c, pavement_temp_c, latitude, depth_mm, analysis_category, temp_data_confirmed, master_curve_confirmed, station_selected)
+    if climate_input_mode == "Valores mensuales" and len(monthly_values) == 12 and temp_data_confirmed:
+        climate_checks.append(("success", "Serie mensual completa: 12 valores documentados y procesados."))
+    for level,msg in climate_checks:
+        getattr(st, level)(msg)
+    st.info("Referencia incorporada: GDP-2024 Tomo I, Sección 303.01, ecuaciones 303-01 a 303-04; GDP-2024 Tomo II, Anexo B.3 sobre temperatura del pavimento y estaciones climáticas consideradas.")
+
+with p4:
+    if st.session_state.active_tomo == "Tomo II":
+        st.subheader("Catálogo oficial de estructuras — GDP-2024 Tomo II")
+        st.caption("Selección directa desde las Tablas 301-01 a 301-21, sin interpolación y con trazabilidad por resultado.")
+
+        options, tomo2_result = alternatives_for_app(
+            tpd=float(tpd_total),
+            heavy_pct=float(heavy_pct),
+            cbr=float(cbr_design),
+            period=int(years),
+        )
+        st.session_state.tomo2_options = options.copy()
+        st.session_state.tomo2_result = tomo2_result
+        exact_match = tomo2_result.get("status") == "ok" and not options.empty
+        st.session_state.exact_match = exact_match
+
+        st.markdown("### Resumen de entrada normativa")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("TPD", f"{tpd_total:,.0f} veh/día")
+        r2.metric("Pesados", f"{heavy_pct:.2f}%")
+        r3.metric("CBR", f"{cbr_design:.2f}%")
+        r4.metric("Periodo", f"{int(years)} años")
+
+        criteria = tomo2_result.get("criteria", [])
+        if criteria:
+            cdf = pd.DataFrame(criteria)
+            st.dataframe(cdf, use_container_width=True, hide_index=True)
+
+        status = tomo2_result.get("status")
+        if status == "fuera_alcance":
+            st.error("La combinación ingresada está fuera del alcance directo del catálogo Tomo II. No se emite ninguna alternativa normativa.")
+        elif status == "sin_alternativa":
+            st.warning("La combinación está dentro del alcance general, pero la celda correspondiente no asigna una alternativa estructural. Revise la tabla y el criterio indicado.")
+        elif status == "ok":
+            st.success(f"Se encontraron {len(options)} alternativa(s) oficiales para la combinación ingresada.")
+
+        if tomo2_result.get("table"):
+            st.info(f"Referencia de asignación: {tomo2_result.get('table')} · página {tomo2_result.get('page')} · {tomo2_result.get('source','GDP-2024 Tomo II')}")
+
+        st.markdown("#### Estado climático del diseño")
+        for level,msg in climate_checks:
+            if level == "error": st.error(msg)
+            elif level == "warning": st.warning(msg)
+            else: st.success(msg)
+
+        if not options.empty:
+            label_map = {}
+            for _, row in options.iterrows():
+                esp = float(row["Carpeta_cm"]) + float(row["Base_cm"]) + float(row["Subbase_cm"])
+                base_label = row.get("Base_tipo", "Base")
+                label = f"{row['Código']} — {row['Superficie']} — {base_label} — {esp:.0f} cm"
+                label_map[label] = str(row["Código"])
+
+            selected_label = st.selectbox("Seleccione una alternativa oficial", list(label_map.keys()), key="official_tomo2_structure")
+            selected_code = label_map[selected_label]
+            selected_row = options[options["Código"].astype(str) == selected_code].iloc[0].to_dict()
+            st.session_state.selected_row = selected_row
+            total_thickness = float(selected_row["Carpeta_cm"]) + float(selected_row["Base_cm"]) + float(selected_row["Subbase_cm"])
+            st.session_state.total_thickness = total_thickness
+
+            st.markdown("### Paquete estructural seleccionado")
+            k1, k2, k3 = st.columns(3)
+            k1.metric("Código", selected_row["Código"])
+            k2.metric("Tipo de superficie", selected_row["Superficie"])
+            k3.metric("Espesor de capas", f"{total_thickness:.0f} cm")
+
+            left, right = st.columns([0.9, 2.1], gap="large")
+            with left:
+                st.markdown("#### Capas")
+                if float(selected_row["Carpeta_cm"]) > 0:
+                    st.markdown(f'<div class="layer">Carpeta asfáltica<br><b>{float(selected_row["Carpeta_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="layer">{selected_row["Superficie"]}<br><b>Capa superficial</b></div>', unsafe_allow_html=True)
+                if float(selected_row.get("Base_granular_cm", 0)) > 0:
+                    st.markdown(f'<div class="layer">Base granular<br><b>{float(selected_row["Base_granular_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                if float(selected_row.get("Base_estabilizada_cm", 0)) > 0:
+                    st.markdown(f'<div class="layer">Base estabilizada<br><b>{float(selected_row["Base_estabilizada_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                if float(selected_row["Subbase_cm"]) > 0:
+                    st.markdown(f'<div class="layer">Subbase granular<br><b>{float(selected_row["Subbase_cm"]):.0f} cm</b></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="layer">Subrasante<br><b>CBR {cbr_design:.2f}%</b></div>', unsafe_allow_html=True)
+                exploded_view = st.toggle("Vista explotada 3D", value=True, help="Separa las capas para identificarlas con mayor facilidad.", key="gdp3d_exploded")
+                scale_label = st.selectbox("Escala vertical", ["Real (×1)", "Exagerada ×2", "Exagerada ×5"], index=0, key="gdp3d_vertical_scale")
+                vertical_scale = {"Real (×1)":1.0, "Exagerada ×2":2.0, "Exagerada ×5":5.0}[scale_label]
+                view_mode = st.selectbox("Modo de corte", ["Completa", "Media calzada", "Corte transversal", "Corte longitudinal"], key="gdp3d_view_mode")
+                available_layers = [x["name"] for x in _structure_layers_3d(selected_row, sclass, cbr_design)]
+                selected_layer_3d = st.selectbox("Resaltar capa", ["Todas"] + available_layers, key="gdp3d_selected_layer")
+                if vertical_scale > 1:
+                    st.warning(f"Visualización con exageración vertical ×{vertical_scale:g}. Los espesores rotulados conservan el valor de diseño real.")
+                st.caption("Las cotas corresponden al diseño. La subrasante se representa como medio semiinfinito, sin asignarle un espesor estructural ficticio.")
+
+            with right:
+                st.markdown("#### Visor estructural 3D v2")
+                fig_3d = pavement_3d_figure(selected_row, sclass, cbr_design, exploded_view, vertical_scale, view_mode, selected_layer_3d)
+                render_rotating_3d(fig_3d, key="structure_view", height=700, auto_rotate=st.session_state.get("auto_rotate_3d", True))
+
+            if len(options) > 1:
+                with st.expander("Comparar alternativas en 3D", expanded=False):
+                    comparison_codes = [str(v) for v in options["Código"].tolist() if str(v) != str(selected_row["Código"])]
+                    comparison_code = st.selectbox("Alternativa para comparar", comparison_codes, key="gdp3d_compare_code")
+                    comparison_row = options[options["Código"].astype(str) == comparison_code].iloc[0].to_dict()
+                    ca, cb = st.columns(2, gap="medium")
+                    with ca:
+                        st.markdown(f"**Seleccionada: {selected_row['Código']}**")
+                        fig_a = pavement_3d_figure(selected_row, sclass, cbr_design, False, 1.0, "Corte transversal", "Todas")
+                        render_rotating_3d(fig_a, key="compare_a", height=470, auto_rotate=False)
+                    with cb:
+                        st.markdown(f"**Comparación: {comparison_row['Código']}**")
+                        fig_b = pavement_3d_figure(comparison_row, sclass, cbr_design, False, 1.0, "Corte transversal", "Todas")
+                        render_rotating_3d(fig_b, key="compare_b", height=470, auto_rotate=False)
+                    compare_df = pd.DataFrame([
+                        ["Carpeta / superficie", float(selected_row.get("Carpeta_cm",0) or 0), float(comparison_row.get("Carpeta_cm",0) or 0)],
+                        ["Base total", float(selected_row.get("Base_cm",0) or 0), float(comparison_row.get("Base_cm",0) or 0)],
+                        ["Subbase", float(selected_row.get("Subbase_cm",0) or 0), float(comparison_row.get("Subbase_cm",0) or 0)],
+                    ], columns=["Componente", str(selected_row["Código"]), str(comparison_row["Código"])])
+                    st.dataframe(compare_df, use_container_width=True, hide_index=True)
 
             trace = selected_trace(selected_row)
             with st.expander("Trazabilidad GDP-2024 de la alternativa", expanded=True):
@@ -2334,8 +3705,7 @@ with pflex:
             opt_base_price = op3.number_input("Precio base para optimización (₡/m³)", min_value=0.0, value=28000.0, step=1000.0, key="opt_base_price")
             opt_subbase_price = op4.number_input("Precio subbase para optimización (₡/m³)", min_value=0.0, value=22000.0, step=1000.0, key="opt_subbase_price")
             opt_area = float(project_length_m) * float(project_width_m)
-            st.session_state.pop("run_screening_optimization", None)
-            if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
+            st.session_state.pop("run_screening_optimization", None)\n            if st.button("Generar candidatos de diseño", key="run_screening_optimization"):
                 opt_df = optimize_structure_with_constraints(
                     selected_row, materials_for_response, mr, axle_load_kn, tire_pressure_kpa, int(tires_per_axle),
                     allowable_eps_t, allowable_eps_v, reliability_pct, response_log_sigma, opt_area,
