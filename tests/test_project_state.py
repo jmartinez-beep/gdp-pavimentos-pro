@@ -27,6 +27,9 @@ def test_autosave_runtime_metadata_is_not_persisted():
 
 def test_button_state_is_not_persisted_or_restored():
     assert is_ephemeral_state_key("run_screening_optimization")
+    assert is_ephemeral_state_key("evaluate_tomo2_in_tomo1")
+    assert is_ephemeral_state_key("_pending_active_tomo")
+    assert is_ephemeral_state_key("_pending_tomo1_import")
     assert not is_active_control_key("run_screening_optimization")
     assert is_ephemeral_state_key("download_cr2020_asphalt_checklist")
     assert is_ephemeral_state_key("download_cr2010_asphalt_checklist")
