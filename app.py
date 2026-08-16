@@ -15,7 +15,7 @@ from web_storage import (
     project_state_fingerprint, save_project,
 )
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
-from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct
+from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
 from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
@@ -2705,6 +2705,9 @@ with p2:
     a, b, c, d = st.columns(4)
     with a:
         if st.session_state.active_tomo == "Tomo II":
+            pending_tomo2_period = st.session_state.pop("_pending_tomo2_design_period", None)
+            if pending_tomo2_period in (6, 8, 10, 12):
+                st.session_state.tomo2_design_period = int(pending_tomo2_period)
             years = st.selectbox(
                 "Periodo de diseño Tomo II (años)", [6, 8, 10, 12], index=2,
                 key="tomo2_design_period",
@@ -3103,7 +3106,45 @@ with p4:
         if status == "fuera_alcance":
             st.error("La combinación ingresada está fuera del alcance directo del catálogo Tomo II. No se emite ninguna alternativa normativa.")
         elif status == "sin_alternativa":
-            st.warning("La combinación está dentro del alcance general, pero la celda correspondiente no asigna una alternativa estructural. Revise la tabla y el criterio indicado.")
+            st.session_state.pop("selected_row", None)
+            selected_row = None
+            total_thickness = 0.0
+            st.session_state.total_thickness = 0.0
+            exact_categories = tomo2_result.get("categories", {})
+            st.error(
+                "No existe una estructura normativa asignada para "
+                f"{exact_categories.get('tpd', 'TPD sin categoría')}, "
+                f"P{exact_categories.get('pesados', '—')} %, CBR {exact_categories.get('cbr', '—')} % y "
+                f"{exact_categories.get('periodo', years)} años en {tomo2_result.get('table', 'la tabla consultada')}. "
+                "La aplicación no interpola ni copia estructuras de otra celda."
+            )
+            nearby = nearby_catalog_options(float(tpd_total), float(heavy_pct), float(cbr_design), int(years))
+            if nearby:
+                st.markdown("#### Celdas tabuladas cercanas — solo referencia")
+                nearby_df = pd.DataFrame(nearby[:6]).drop(columns=["distancia"])
+                nearby_df.columns = ["Ajuste", "Valor", "Estructura(s)", "Tabla", "Página", "Condición de uso"]
+                st.dataframe(nearby_df, use_container_width=True, hide_index=True)
+                available_periods = [item for item in nearby if item["ajuste"] == "Periodo de diseño"]
+                action_cols = st.columns(2)
+                if available_periods:
+                    closest_period = int(available_periods[0]["valor"])
+                    if action_cols[0].button(
+                        f"Usar periodo tabulado de {closest_period} años",
+                        key="apply_nearby_tomo2_period",
+                        use_container_width=True,
+                        help="Cambia el periodo del proyecto. Confirme y documente que este horizonte sea procedente.",
+                    ):
+                        st.session_state._pending_tomo2_design_period = closest_period
+                        st.rerun()
+                if action_cols[1].button(
+                    "Evaluar el caso mediante Tomo I",
+                    key="evaluate_unassigned_tomo2_in_tomo1",
+                    use_container_width=True,
+                ):
+                    st.session_state._pending_active_tomo = "Tomo I"
+                    st.rerun()
+            else:
+                st.info("No se encontraron celdas cercanas con estructura. Revise el alcance del proyecto y evalúe el caso mediante Tomo I.")
         elif status == "ok":
             st.success(f"Se encontraron {len(options)} alternativa(s) oficiales para la combinación ingresada.")
 

@@ -81,3 +81,61 @@ def select_structures(tpd: float, heavy_pct: float, cbr: float, period: int) -> 
             "trazabilidad":{"fuente":SOURCE,"decreto":DECREE,"definicion_estructura":"Tabla 301-01, pagina 38","asignacion":f"{table}, pagina {page}","criterio":f"Periodo {period} anos; CBR {cc}%; pesados P{pc}%; TPD {tc}","celda_original":str(r.raw_cell),"nota_extraccion":str(r.nota_extraccion) if pd.notna(r.nota_extraccion) else ""}
         })
     return {"status":"ok" if alternatives else "sin_alternativa","source":SOURCE,"decree":DECREE,"table":table,"page":page,"categories":{"tpd":tc,"cbr":cc,"pesados":pc,"periodo":period},"criteria":criteria,"alternatives":alternatives}
+
+
+def nearby_catalog_options(tpd: float, heavy_pct: float, cbr: float, period: int) -> list[dict[str, Any]]:
+    """Return only explicitly tabulated nearby cells; never interpolate a structure."""
+    candidates: list[dict[str, Any]] = []
+
+    def add(kind: str, value: float, result: dict[str, Any], note: str, distance: float) -> None:
+        codes = [str(alt.get("codigo", "")) for alt in result.get("alternatives", []) if alt.get("codigo")]
+        if not codes:
+            return
+        candidates.append({
+            "ajuste": kind,
+            "valor": value,
+            "estructuras": ", ".join(codes),
+            "tabla": result.get("table", ""),
+            "pagina": result.get("page"),
+            "advertencia": note,
+            "distancia": float(distance),
+        })
+
+    for candidate_period in (6, 8, 10, 12):
+        if candidate_period == period:
+            continue
+        result = select_structures(tpd, heavy_pct, cbr, candidate_period)
+        add(
+            "Periodo de diseño",
+            candidate_period,
+            result,
+            "Solo procede si el periodo adoptado por el proyecto se cambia y documenta.",
+            abs(candidate_period - period),
+        )
+
+    for candidate_cbr in (3, 4, 6, 9, 11):
+        if classify_cbr(cbr) == candidate_cbr:
+            continue
+        result = select_structures(tpd, heavy_pct, float(candidate_cbr), period)
+        add(
+            "Categoría CBR",
+            candidate_cbr,
+            result,
+            "Solo procede con resultados geotécnicos representativos o mejoramiento verificado.",
+            abs(candidate_cbr - cbr),
+        )
+
+    for candidate_heavy in (3.0, 4.0, 5.0, 7.0, 8.5, 14.0, 15.0):
+        if classify_heavy_pct(heavy_pct) == str(candidate_heavy).rstrip("0").rstrip("."):
+            continue
+        result = select_structures(tpd, candidate_heavy, cbr, period)
+        add(
+            "Pesados (%)",
+            candidate_heavy,
+            result,
+            "Es solo referencia; no cambie el tránsito sin respaldo del estudio correspondiente.",
+            abs(candidate_heavy - heavy_pct),
+        )
+
+    candidates.sort(key=lambda item: (item["distancia"], item["ajuste"], item["valor"]))
+    return candidates
