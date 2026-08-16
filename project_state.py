@@ -35,3 +35,16 @@ def is_active_control_key(key: object) -> bool:
     """Keys already instantiated above the project loader and unsafe to delete mid-run."""
     text = str(key)
     return text in ACTIVE_CONTROL_KEYS or text.startswith("FormSubmitter")
+
+
+def tomo1_structure_identifier(source: object, code: object) -> str:
+    """Return an identifier that makes the Tomo I evaluation context explicit."""
+    source_text = str(source or "").strip()
+    code_text = str(code or "").strip()
+    if source_text.startswith("Importada"):
+        if code_text.startswith("T1-EVAL-"):
+            return code_text
+        return f"T1-EVAL-{code_text}" if code_text else "T1-EVAL-01"
+    if not code_text or code_text.startswith("T1-EVAL-"):
+        return "T1-PROP-01"
+    return code_text

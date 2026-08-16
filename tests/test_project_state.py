@@ -1,4 +1,4 @@
-from project_state import is_active_control_key, is_ephemeral_state_key
+from project_state import is_active_control_key, is_ephemeral_state_key, tomo1_structure_identifier
 
 
 def test_data_editor_widget_keys_are_ephemeral():
@@ -31,3 +31,10 @@ def test_button_state_is_not_persisted_or_restored():
     assert is_ephemeral_state_key("download_cr2020_asphalt_checklist")
     assert is_ephemeral_state_key("download_cr2010_asphalt_checklist")
     assert not is_active_control_key("download_cr2020_asphalt_checklist")
+
+
+def test_tomo1_identifiers_distinguish_proposed_and_imported_sections():
+    assert tomo1_structure_identifier("Definida por el usuario", "") == "T1-PROP-01"
+    assert tomo1_structure_identifier("Importada de Tomo II para evaluación", "EBE-2") == "T1-EVAL-EBE-2"
+    assert tomo1_structure_identifier("Importada de Tomo II para evaluación", "T1-EVAL-EBE-2") == "T1-EVAL-EBE-2"
+    assert tomo1_structure_identifier("Definida por el usuario", "T1-EVAL-EBE-2") == "T1-PROP-01"
