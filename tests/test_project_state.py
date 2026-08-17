@@ -75,3 +75,18 @@ def test_visible_segment_widgets_update_durable_snapshot():
     merged = merge_segment_coordinate_snapshot(saved, widgets)
     assert merged["start_e"] == 479868.240
     assert merged["end_n"] == 1084705.720
+
+
+def test_each_coordinate_change_is_safe_before_widgets_are_hidden():
+    saved = {
+        "start_e": 479000.0,
+        "start_n": 1084000.0,
+        "end_e": 479100.0,
+        "end_n": 1084100.0,
+    }
+    after_edit = merge_segment_coordinate_snapshot(
+        saved, {"project_segment_end_e": 479993.620}
+    )
+    after_switch_to_point = merge_segment_coordinate_snapshot(after_edit, {})
+    assert after_switch_to_point["start_e"] == 479000.0
+    assert after_switch_to_point["end_e"] == 479993.620
