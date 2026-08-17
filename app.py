@@ -2401,18 +2401,18 @@ with p1:
         ) or "WGS84"
         if segment_system == "WGS84":
             sg1, sg2, sg3, sg4 = st.columns(4)
-            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(segment_coordinates.get("start_lat", latitude)), format="%.7f", key="project_segment_start_lat")
-            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(segment_coordinates.get("start_lon", longitude)), format="%.7f", key="project_segment_start_lon")
-            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(segment_coordinates.get("end_lat", latitude)), format="%.7f", key="project_segment_end_lat")
-            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(segment_coordinates.get("end_lon", longitude)), format="%.7f", key="project_segment_end_lon")
+            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(segment_coordinates.get("start_lat", latitude)), format="%.7f", key="project_segment_start_lat", on_change=preserve_segment_coordinates)
+            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(segment_coordinates.get("start_lon", longitude)), format="%.7f", key="project_segment_start_lon", on_change=preserve_segment_coordinates)
+            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(segment_coordinates.get("end_lat", latitude)), format="%.7f", key="project_segment_end_lat", on_change=preserve_segment_coordinates)
+            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(segment_coordinates.get("end_lon", longitude)), format="%.7f", key="project_segment_end_lon", on_change=preserve_segment_coordinates)
             start_e, start_n = wgs84_to_crtm05(start_lon, start_lat)
             end_e, end_n = wgs84_to_crtm05(end_lon, end_lat)
         else:
             sg1, sg2, sg3, sg4 = st.columns(4)
-            start_e = sg1.number_input("Este inicial CRTM05", value=float(segment_coordinates.get("start_e", crtm_easting)), format="%.3f", key="project_segment_start_e")
-            start_n = sg2.number_input("Norte inicial CRTM05", value=float(segment_coordinates.get("start_n", crtm_northing)), format="%.3f", key="project_segment_start_n")
-            end_e = sg3.number_input("Este final CRTM05", value=float(segment_coordinates.get("end_e", crtm_easting)), format="%.3f", key="project_segment_end_e")
-            end_n = sg4.number_input("Norte final CRTM05", value=float(segment_coordinates.get("end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
+            start_e = sg1.number_input("Este inicial CRTM05", value=float(segment_coordinates.get("start_e", crtm_easting)), format="%.3f", key="project_segment_start_e", on_change=preserve_segment_coordinates)
+            start_n = sg2.number_input("Norte inicial CRTM05", value=float(segment_coordinates.get("start_n", crtm_northing)), format="%.3f", key="project_segment_start_n", on_change=preserve_segment_coordinates)
+            end_e = sg3.number_input("Este final CRTM05", value=float(segment_coordinates.get("end_e", crtm_easting)), format="%.3f", key="project_segment_end_e", on_change=preserve_segment_coordinates)
+            end_n = sg4.number_input("Norte final CRTM05", value=float(segment_coordinates.get("end_n", crtm_northing)), format="%.3f", key="project_segment_end_n", on_change=preserve_segment_coordinates)
             start_lon, start_lat = crtm05_to_wgs84(start_e, start_n)
             end_lon, end_lat = crtm05_to_wgs84(end_e, end_n)
 
