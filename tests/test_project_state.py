@@ -1,4 +1,8 @@
-from project_state import is_active_control_key, is_ephemeral_state_key, tomo1_structure_identifier
+from project_state import (
+    is_active_control_key, is_ephemeral_state_key,
+    merge_segment_coordinate_snapshot,
+    tomo1_structure_identifier,
+)
 
 
 def test_data_editor_widget_keys_are_ephemeral():
@@ -48,3 +52,26 @@ def test_tomo1_identifiers_distinguish_proposed_and_imported_sections():
     assert tomo1_structure_identifier("Definida por el usuario", "EBG-4") == "T1-PROP-01"
     assert tomo1_structure_identifier("Definida por el usuario", "ETS-1") == "T1-PROP-01"
     assert tomo1_structure_identifier("Definida por el usuario", "T1-PROP-JORCO") == "T1-PROP-JORCO"
+
+
+def test_segment_coordinates_survive_when_widget_keys_disappear():
+    saved = {
+        "start_e": 479868.240,
+        "start_n": 1084814.720,
+        "end_e": 479993.620,
+        "end_n": 1084705.720,
+    }
+    assert merge_segment_coordinate_snapshot(saved, {}) == saved
+
+
+def test_visible_segment_widgets_update_durable_snapshot():
+    saved = {"start_e": 1.0, "end_e": 2.0}
+    widgets = {
+        "project_segment_start_e": 479868.240,
+        "project_segment_start_n": 1084814.720,
+        "project_segment_end_e": 479993.620,
+        "project_segment_end_n": 1084705.720,
+    }
+    merged = merge_segment_coordinate_snapshot(saved, widgets)
+    assert merged["start_e"] == 479868.240
+    assert merged["end_n"] == 1084705.720

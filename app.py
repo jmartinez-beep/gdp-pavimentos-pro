@@ -22,7 +22,11 @@ from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 from road_alignment import RoadAlignmentError, road_route
-from project_state import is_active_control_key, is_ephemeral_state_key, tomo1_structure_identifier
+from project_state import (
+    is_active_control_key, is_ephemeral_state_key,
+    merge_segment_coordinate_snapshot,
+    tomo1_structure_identifier,
+)
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -2355,12 +2359,24 @@ with p1:
     st.markdown("#### Mapa e inventario geográfico del proyecto")
     st.caption("Defina la geometría principal como un punto único o como un tramo entre dos puntos. El mapa permite zoom con la rueda del mouse.")
 
+    def preserve_segment_coordinates() -> None:
+        st.session_state.project_segment_coordinates = merge_segment_coordinate_snapshot(
+            st.session_state.get("project_segment_coordinates", {}),
+            dict(st.session_state),
+        )
+
     geometry_mode = st.segmented_control(
         "Geometría principal del proyecto",
         ["Punto único", "Tramo (inicio–fin)"],
         default=st.session_state.get("project_map_geometry_mode", "Punto único"),
         key="project_map_geometry_mode",
+        on_change=preserve_segment_coordinates,
     ) or "Punto único"
+
+    # Streamlit elimina el estado de widgets que dejan de renderizarse. Se mantiene
+    # una copia durable para restaurar el tramo al volver desde "Punto único".
+    preserve_segment_coordinates()
+    segment_coordinates = st.session_state.get("project_segment_coordinates", {})
 
     main_project_line = []
     alignment_mode = "Línea directa"
@@ -2381,23 +2397,31 @@ with p1:
             "Sistema para inicio y fin", ["WGS84", "CRTM05"],
             default=st.session_state.get("project_segment_system", "WGS84"),
             key="project_segment_system",
+            on_change=preserve_segment_coordinates,
         ) or "WGS84"
         if segment_system == "WGS84":
             sg1, sg2, sg3, sg4 = st.columns(4)
-            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(st.session_state.get("project_segment_start_lat", latitude)), format="%.7f", key="project_segment_start_lat")
-            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(st.session_state.get("project_segment_start_lon", longitude)), format="%.7f", key="project_segment_start_lon")
-            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(st.session_state.get("project_segment_end_lat", latitude)), format="%.7f", key="project_segment_end_lat")
-            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(st.session_state.get("project_segment_end_lon", longitude)), format="%.7f", key="project_segment_end_lon")
+            start_lat = sg1.number_input("Latitud inicial", -90.0, 90.0, value=float(segment_coordinates.get("start_lat", latitude)), format="%.7f", key="project_segment_start_lat")
+            start_lon = sg2.number_input("Longitud inicial", -180.0, 180.0, value=float(segment_coordinates.get("start_lon", longitude)), format="%.7f", key="project_segment_start_lon")
+            end_lat = sg3.number_input("Latitud final", -90.0, 90.0, value=float(segment_coordinates.get("end_lat", latitude)), format="%.7f", key="project_segment_end_lat")
+            end_lon = sg4.number_input("Longitud final", -180.0, 180.0, value=float(segment_coordinates.get("end_lon", longitude)), format="%.7f", key="project_segment_end_lon")
             start_e, start_n = wgs84_to_crtm05(start_lon, start_lat)
             end_e, end_n = wgs84_to_crtm05(end_lon, end_lat)
         else:
             sg1, sg2, sg3, sg4 = st.columns(4)
-            start_e = sg1.number_input("Este inicial CRTM05", value=float(st.session_state.get("project_segment_start_e", crtm_easting)), format="%.3f", key="project_segment_start_e")
-            start_n = sg2.number_input("Norte inicial CRTM05", value=float(st.session_state.get("project_segment_start_n", crtm_northing)), format="%.3f", key="project_segment_start_n")
-            end_e = sg3.number_input("Este final CRTM05", value=float(st.session_state.get("project_segment_end_e", crtm_easting)), format="%.3f", key="project_segment_end_e")
-            end_n = sg4.number_input("Norte final CRTM05", value=float(st.session_state.get("project_segment_end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
+            start_e = sg1.number_input("Este inicial CRTM05", value=float(segment_coordinates.get("start_e", crtm_easting)), format="%.3f", key="project_segment_start_e")
+            start_n = sg2.number_input("Norte inicial CRTM05", value=float(segment_coordinates.get("start_n", crtm_northing)), format="%.3f", key="project_segment_start_n")
+            end_e = sg3.number_input("Este final CRTM05", value=float(segment_coordinates.get("end_e", crtm_easting)), format="%.3f", key="project_segment_end_e")
+            end_n = sg4.number_input("Norte final CRTM05", value=float(segment_coordinates.get("end_n", crtm_northing)), format="%.3f", key="project_segment_end_n")
             start_lon, start_lat = crtm05_to_wgs84(start_e, start_n)
             end_lon, end_lat = crtm05_to_wgs84(end_e, end_n)
+
+        st.session_state.project_segment_coordinates = {
+            "start_lat": float(start_lat), "start_lon": float(start_lon),
+            "end_lat": float(end_lat), "end_lon": float(end_lon),
+            "start_e": float(start_e), "start_n": float(start_n),
+            "end_e": float(end_e), "end_n": float(end_n),
+        }
 
         alignment_mode = st.radio(
             "Trazado del eje",
