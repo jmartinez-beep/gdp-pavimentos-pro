@@ -22,6 +22,40 @@ ACTIVE_CONTROL_KEYS = {
 
 TOMO2_CATALOG_PREFIXES = ("EBE-", "EBG-", "ETS-")
 
+SEGMENT_COORDINATE_KEYS = (
+    "start_lat", "start_lon", "end_lat", "end_lon",
+    "start_e", "start_n", "end_e", "end_n",
+)
+
+
+def merge_segment_coordinate_snapshot(
+    saved: object, widget_values: dict[str, object]
+) -> dict[str, float]:
+    """Merge visible segment widgets into durable, mode-independent state."""
+    result: dict[str, float] = {}
+    if isinstance(saved, dict):
+        for key in SEGMENT_COORDINATE_KEYS:
+            try:
+                result[key] = float(saved[key])
+            except (KeyError, TypeError, ValueError):
+                pass
+    widget_to_field = {
+        "project_segment_start_lat": "start_lat",
+        "project_segment_start_lon": "start_lon",
+        "project_segment_end_lat": "end_lat",
+        "project_segment_end_lon": "end_lon",
+        "project_segment_start_e": "start_e",
+        "project_segment_start_n": "start_n",
+        "project_segment_end_e": "end_e",
+        "project_segment_end_n": "end_n",
+    }
+    for widget_key, field in widget_to_field.items():
+        try:
+            result[field] = float(widget_values[widget_key])
+        except (KeyError, TypeError, ValueError):
+            pass
+    return result
+
 
 def is_ephemeral_state_key(key: object) -> bool:
     """Return True for widget-owned state that must not be restored directly."""
