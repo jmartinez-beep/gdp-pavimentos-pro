@@ -11,6 +11,7 @@ def test_data_editor_widget_keys_are_ephemeral():
     assert is_ephemeral_state_key("vehicle_composition_editor")
     assert is_ephemeral_state_key("homogeneous_segments_editor")
     assert is_ephemeral_state_key("climate_monthly_editor_Cartago")
+    assert is_ephemeral_state_key("climate_tmi_editor_Upala")
 
 
 def test_persistent_project_data_is_not_filtered():
