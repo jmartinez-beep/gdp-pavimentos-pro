@@ -1270,7 +1270,7 @@ def pavement_3d_figure(
 
 
 def render_rotating_3d(fig: go.Figure, key: str, height: int = 690, auto_rotate: bool = True) -> None:
-    """Render Plotly 3D con rotación y cámaras técnicas predefinidas."""
+    """Render Plotly 3D con rotación e interacción directa."""
     div_id = f"gdp_3d_{key}"
     fig.update_layout(margin=dict(l=0, r=0, t=46, b=0))
     plot_html = pio.to_html(
@@ -1295,13 +1295,8 @@ def render_rotating_3d(fig: go.Figure, key: str, height: int = 690, auto_rotate:
         <button id="pause_{key}" class="gdp-btn">⏸</button>
         <button id="resume_{key}" class="gdp-btn">▶</button>
         <span id="state_{key}" class="gdp-state">Rotando…</span>
-        <button id="iso_{key}" class="gdp-btn">Isométrica</button>
-        <button id="plan_{key}" class="gdp-btn">Planta</button>
-        <button id="profile_{key}" class="gdp-btn">Perfil</button>
-        <button id="section_{key}" class="gdp-btn">Sección</button>
-        <button id="reset_{key}" class="gdp-btn">Restablecer</button>
       </div>
-      <div class="gdp-hint">Arrastre: orbitar · Scroll: zoom</div>
+      <div class="gdp-hint">Arrastre: orbitar · Scroll: zoom · Doble clic: restablecer</div>
     </div>
     <script>
     (function(){{
@@ -1310,14 +1305,8 @@ def render_rotating_3d(fig: go.Figure, key: str, height: int = 690, auto_rotate:
       let running={initial}, internalUpdate=false, radius=2.32, angle=.73, eyeZ=1.18;
       const speed=.0030;
       function sync(){{state.textContent=running?'Rotando…':'Pausado';state.style.color=running?'#6ed7ff':'#ffc857';}}
-      function camera(eye, up={{x:0,y:0,z:1}}){{running=false;sync();internalUpdate=true;return Plotly.relayout(gd,{{'scene.camera':{{eye:eye,up:up,projection:{{type:'perspective'}}}}}}).then(()=>{{internalUpdate=false;radius=Math.max(.65,Math.hypot(eye.x,eye.y));angle=Math.atan2(eye.y,eye.x);eyeZ=eye.z;}}).catch(()=>{{internalUpdate=false;}});}}
       document.getElementById('pause_{key}').onclick=()=>{{running=false;sync();}};
       document.getElementById('resume_{key}').onclick=()=>{{running=true;sync();}};
-      document.getElementById('iso_{key}').onclick=()=>camera({{x:1.70,y:1.58,z:1.18}});
-      document.getElementById('plan_{key}').onclick=()=>camera({{x:.01,y:.01,z:2.8}});
-      document.getElementById('profile_{key}').onclick=()=>camera({{x:.01,y:2.8,z:.35}});
-      document.getElementById('section_{key}').onclick=()=>camera({{x:2.8,y:.01,z:.40}});
-      document.getElementById('reset_{key}').onclick=()=>camera({{x:1.70,y:1.58,z:1.18}});
       sync();
       gd.on('plotly_relayout',function(ev){{if(internalUpdate)return;const cam=ev['scene.camera'];if(cam&&cam.eye){{const e=cam.eye;if(Number.isFinite(e.x)&&Number.isFinite(e.y)){{radius=Math.max(.65,Math.hypot(e.x,e.y));angle=Math.atan2(e.y,e.x);}}if(Number.isFinite(e.z))eyeZ=e.z;}}}});
       function tick(){{if(!running||document.hidden)return;angle+=speed;internalUpdate=true;Plotly.relayout(gd,{{'scene.camera.eye':{{x:radius*Math.cos(angle),y:radius*Math.sin(angle),z:eyeZ}}}}).then(()=>{{internalUpdate=false;}}).catch(()=>{{internalUpdate=false;}});}}
