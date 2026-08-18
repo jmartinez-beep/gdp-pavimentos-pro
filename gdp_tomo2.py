@@ -30,6 +30,12 @@ def classify_cbr(cbr: float) -> int | None:
     if cbr < 11: return 9
     return 11
 
+
+def representative_cbr_for_mr(cbr: float) -> float | None:
+    """Return the lower-bound Tomo II CBR category used to estimate Mr."""
+    category = classify_cbr(cbr)
+    return float(category) if category is not None else None
+
 def classify_heavy_pct(pct: float) -> str | None:
     if pct < 0: return None
     if pct <= 3.0: return "3"
