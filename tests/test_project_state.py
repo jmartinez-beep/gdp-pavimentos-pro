@@ -1,6 +1,7 @@
 from project_state import (
     is_active_control_key, is_ephemeral_state_key,
     merge_segment_coordinate_snapshot,
+    update_segment_coordinate_snapshot,
     tomo1_structure_identifier,
 )
 
@@ -90,3 +91,17 @@ def test_each_coordinate_change_is_safe_before_widgets_are_hidden():
     after_switch_to_point = merge_segment_coordinate_snapshot(after_edit, {})
     assert after_switch_to_point["start_e"] == 479000.0
     assert after_switch_to_point["end_e"] == 479993.620
+
+
+def test_atomic_coordinate_update_does_not_replace_other_values():
+    saved = {
+        "start_e": 479868.240,
+        "start_n": 1084814.720,
+        "end_e": 479900.000,
+        "end_n": 1084705.720,
+    }
+    updated = update_segment_coordinate_snapshot(saved, "end_e", 479993.620)
+    assert updated["end_e"] == 479993.620
+    assert updated["start_e"] == 479868.240
+    assert updated["start_n"] == 1084814.720
+    assert updated["end_n"] == 1084705.720
