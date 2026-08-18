@@ -886,22 +886,22 @@ def _material_style(name: str):
     n = name.lower()
     if "asf" in n or "tratamiento" in n or "superficie" in n:
         return dict(
-            palette=[[0.0,"#151515"],[0.12,"#222323"],[0.30,"#343535"],[0.50,"#494a49"],[0.68,"#626260"],[0.84,"#85847f"],[0.94,"#b2afa6"],[1.0,"#ddd9cf"]],
-            seed=11, kind="asphalt", edge="#101111", rough=0.060
+            palette=[[0.0,"#17191a"],[0.20,"#252829"],[0.45,"#343839"],[0.70,"#484c4c"],[0.90,"#606363"],[1.0,"#777976"]],
+            seed=11, kind="asphalt", edge="#111415", rough=0.035
         )
     if "base granular" in n:
         return dict(
-            palette=[[0.0,"#363737"],[0.12,"#4a4c4d"],[0.30,"#626568"],[0.48,"#7d8286"],[0.66,"#999fa3"],[0.82,"#b7bdc0"],[0.94,"#d4d8d8"],[1.0,"#eeeeea"]],
-            seed=23, kind="base", edge="#252728", rough=0.19
+            palette=[[0.0,"#596166"],[0.20,"#6d777c"],[0.45,"#849095"],[0.70,"#9ba6aa"],[0.90,"#b3bcbf"],[1.0,"#c8cecf"]],
+            seed=23, kind="base", edge="#394247", rough=0.11
         )
     if "subbase" in n:
         return dict(
-            palette=[[0.0,"#79662f"],[0.12,"#8c7838"],[0.30,"#a28d48"],[0.48,"#b8a45c"],[0.66,"#cdbb76"],[0.82,"#dfcf91"],[0.94,"#eee0aa"],[1.0,"#f5e9c0"]],
-            seed=37, kind="subbase", edge="#5e4e25", rough=0.20
+            palette=[[0.0,"#8a633e"],[0.20,"#9d7650"],[0.45,"#b28d67"],[0.70,"#c6a57e"],[0.90,"#d8ba96"],[1.0,"#e5cba9"]],
+            seed=37, kind="subbase", edge="#67462d", rough=0.12
         )
     return dict(
-        palette=[[0.0,"#3a271a"],[0.12,"#4c3422"],[0.30,"#684a31"],[0.48,"#815f43"],[0.66,"#9b7959"],[0.82,"#b39372"],[0.94,"#c6aa8a"],[1.0,"#d5bea1"]],
-        seed=51, kind="soil", edge="#2b1b11", rough=0.15
+        palette=[[0.0,"#573522"],[0.20,"#6b432b"],[0.45,"#80563a"],[0.70,"#956b4b"],[0.90,"#aa8261"],[1.0,"#bc9978"]],
+        seed=51, kind="soil", edge="#382116", rough=0.09
     )
 
 
@@ -1032,19 +1032,19 @@ def _aggregate_particles(x0: float, x1: float, y0: float, y1: float, z0: float, 
     """Microdetalle mineral embebido en las caras visibles; evita apariencia de cantos sueltos gigantes."""
     import numpy as np
     n=name.lower(); quality=st.session_state.get("render_quality","Alta")
-    base_counts={"Media":160,"Alta":340,"Ultra":720}; count=base_counts.get(quality,320)
+    base_counts={"Media":90,"Alta":190,"Ultra":380}; count=base_counts.get(quality,180)
     traces=[]
     if "asf" in n or "tratamiento" in n or "superficie" in n:
-        count=int(count*1.35); size=(.45,1.45); seed=111; opacity=.56
+        count=int(count*1.20); size=(.40,1.15); seed=111; opacity=.38
         colors=[[0,"#202121"],[.30,"#484a49"],[.58,"#747570"],[.82,"#aaa89f"],[1,"#e2ded3"]]; symbol='circle'
     elif "base granular" in n:
-        count=int(count*.95); size=(.65,2.35); seed=223; opacity=.78
+        count=int(count*.90); size=(.55,1.80); seed=223; opacity=.52
         colors=[[0,"#414346"],[.28,"#666a6e"],[.56,"#8b9195"],[.82,"#bec3c4"],[1,"#eceeea"]]; symbol='diamond'
     elif "subbase" in n:
-        count=int(count*.82); size=(.75,2.65); seed=337; opacity=.75
+        count=int(count*.78); size=(.60,1.95); seed=337; opacity=.50
         colors=[[0,"#78642d"],[.28,"#9a8240"],[.56,"#bea65d"],[.82,"#dccb8a"],[1,"#f2e5b5"]]; symbol='diamond'
     else:
-        count=int(count*.90); size=(.35,1.25); seed=451; opacity=.38
+        count=int(count*.82); size=(.30,1.00); seed=451; opacity=.28
         colors=[[0,"#3c281a"],[.40,"#654830"],[.70,"#937054"],[1,"#c3a586"]]; symbol='circle'
 
     rng=np.random.default_rng(seed+int(z0*7)+int(z1*11))
@@ -1139,21 +1139,6 @@ def _top_surface_z_3d(selected: Dict, sclass: str, cbr: float, vertical_scale: f
     return z
 
 
-def _dimension_trace_3d(x: float, y: float, z0: float, z1: float, label: str, color: str):
-    return go.Scatter3d(
-        x=[x, x, None, x-0.18, x+0.18, None, x-0.18, x+0.18],
-        y=[y, y, None, y, y, None, y, y],
-        z=[z0, z1, None, z0, z0, None, z1, z1],
-        mode="lines+text",
-        text=[None, label, None, None, None, None, None, None],
-        textposition="middle right",
-        line=dict(color=color, width=4),
-        textfont=dict(color="#f5f9ff", size=12),
-        hoverinfo="skip",
-        showlegend=False,
-    )
-
-
 def pavement_3d_figure(
     selected: Dict,
     sclass: str,
@@ -1178,10 +1163,9 @@ def pavement_3d_figure(
         x0, x1, y0, y1 = 0.0, road_length, 0.0, road_width
 
     layers = _structure_layers_3d(selected, sclass, cbr)
-    traces, annotations = [], []
+    traces = []
     z_cursor = 0.0
     top_surface_z = 0.0
-    structural_dimension_index = 0
 
     for idx, layer in enumerate(reversed(layers)):
         name = layer["name"]
@@ -1192,31 +1176,6 @@ def pavement_3d_figure(
             z_cursor += gap
         z0, z1 = z_cursor, z_cursor + geom_thickness
         traces.extend(_textured_box(x0, x1, y0, y1, z0, z1, name))
-
-        if is_subgrade_visual:
-            label = f"<b>{name}</b><br>CBR {cbr:.2f}%<br><i>medio semiinfinito</i>"
-        elif layer.get("normative", True):
-            label = f"<b>{name}</b><br>{thickness:.1f} cm"
-        else:
-            label = f"<b>{name}</b><br><i>sin espesor normativo</i>"
-
-        annotations.append(dict(
-            x=x1 + 0.36, y=y1 * 0.78, z=(z0 + z1) / 2,
-            text=label, showarrow=True, arrowhead=0, arrowsize=1,
-            arrowwidth=2, arrowcolor=layer["color"], ax=62, ay=0,
-            bgcolor="rgba(7,20,33,.95)", bordercolor=layer["color"], borderwidth=2,
-            font=dict(size=12, color="#f4f7f8"), opacity=.97,
-        ))
-
-        if layer.get("normative", True):
-            structural_dimension_index += 1
-            traces.append(_dimension_trace_3d(
-                x1 + 0.15 + structural_dimension_index * 0.10,
-                y0 + 0.12,
-                z0, z1,
-                f"{thickness:.1f} cm",
-                layer["color"],
-            ))
 
         if selected_layer not in ("Todas", name):
             # Mantiene contexto visual completo; la capa seleccionada se resalta con un marco adicional.
@@ -1240,29 +1199,43 @@ def pavement_3d_figure(
     platform.update(opacity=.68, hoverinfo="skip", showlegend=False)
     traces = [platform, platform_edges] + traces
 
-    scale_label = "Escala vertical real" if abs(vertical_scale - 1.0) < 1e-9 else f"Exageración vertical ×{vertical_scale:g}"
-    annotations.append(dict(
-        x=x0, y=y0, z=top_surface_z + 4.5,
-        text=f"<b>{scale_label}</b><br>{view_mode}", showarrow=False,
-        bgcolor="rgba(5,18,30,.88)", bordercolor="#2d688f", borderwidth=1,
-        font=dict(size=11, color="#dff3ff"), xanchor="left",
+    # Columna fija de etiquetas: no tapa el modelo y permanece ordenada al orbitar.
+    label_annotations = [dict(
+        x=.825, y=.91, xref="paper", yref="paper", text="<b>CAPAS</b>",
+        showarrow=False, xanchor="left", font=dict(size=11, color="#7fd7ff"),
+    )]
+    label_count = max(len(layers), 1)
+    for index, layer in enumerate(layers):
+        is_subgrade = (not layer.get("normative", True)) and "Subrasante" in layer["name"]
+        detail = "Medio de apoyo" if is_subgrade else f"{float(layer['thickness']):.1f} cm"
+        label_annotations.append(dict(
+            x=.825, y=.84-index*(.64/max(label_count-1, 1)), xref="paper", yref="paper",
+            text=f"<b>{layer['name']}</b><br>{detail}", showarrow=False,
+            xanchor="left", align="left", bgcolor="rgba(7,20,33,.94)",
+            bordercolor=layer["color"], borderwidth=2, borderpad=6,
+            font=dict(size=11, color="#f4f7f8"),
+        ))
+    label_annotations.append(dict(
+        x=.825, y=.08, xref="paper", yref="paper",
+        text=f"<span style='color:#9fb5c5'>Subrasante: CBR {cbr:.2f}%</span>",
+        showarrow=False, xanchor="left", align="left", font=dict(size=10, color="#9fb5c5"),
     ))
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         height=690, paper_bgcolor="#06121d", plot_bgcolor="#06121d",
-        margin=dict(l=0, r=0, t=58, b=0),
+        margin=dict(l=0, r=0, t=58, b=0), annotations=label_annotations,
         title=dict(text=f"<b>Visor estructural 3D v2 — {selected.get('Código', '')}</b>", x=.025, font=dict(color="white", size=18)),
         showlegend=False,
         scene=dict(
+            domain=dict(x=[0.0, .79], y=[0.0, 1.0]),
             bgcolor="#06121d",
-            xaxis=dict(title="Longitud representativa (m)", showbackground=True, backgroundcolor="#0b1c2a", gridcolor="#26445b", zerolinecolor="#55758d", color="#d9efff", showspikes=False),
-            yaxis=dict(title="Ancho representativo (m)", showbackground=True, backgroundcolor="#0b1c2a", gridcolor="#26445b", zerolinecolor="#55758d", color="#d9efff", showspikes=False),
-            zaxis=dict(title="Escala gráfica vertical", showbackground=True, backgroundcolor="#091a27", gridcolor="#26445b", zerolinecolor="#55758d", color="#d9efff", showspikes=False),
+            xaxis=dict(title="Longitud (m)", showbackground=False, gridcolor="#173148", zerolinecolor="#36566e", color="#bcd2e2", showspikes=False),
+            yaxis=dict(title="Ancho (m)", showbackground=False, gridcolor="#173148", zerolinecolor="#36566e", color="#bcd2e2", showspikes=False),
+            zaxis=dict(title="Espesor (cm)", showbackground=False, gridcolor="#173148", zerolinecolor="#36566e", color="#bcd2e2", showspikes=False),
             aspectmode="manual",
             aspectratio=dict(x=1.70, y=1.03 if view_mode != "Corte longitudinal" else .55, z=1.06),
-            camera=dict(eye=dict(x=1.70, y=1.58, z=1.18), projection=dict(type="perspective")),
-            annotations=annotations,
+            camera=dict(eye=dict(x=1.62, y=1.48, z=1.38), projection=dict(type="perspective")),
         ),
         meta={"gdp3d_version":"2.0","vertical_scale":vertical_scale,"view_mode":view_mode},
     )
