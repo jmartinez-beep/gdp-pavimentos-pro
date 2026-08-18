@@ -12,7 +12,7 @@ import os
 
 from web_storage import (
     authenticate, create_user, delete_project, list_projects, load_project,
-    project_state_fingerprint, save_project,
+    project_state_fingerprint, save_project, serialize_value,
 )
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options
@@ -4500,7 +4500,7 @@ with p6:
     )
     st.download_button(
         "Descargar datos en JSON",
-        data=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        data=json.dumps(serialize_value(payload), ensure_ascii=False, indent=2).encode("utf-8"),
         file_name="datos_diseno_gdp.json",
         mime="application/json",
     )

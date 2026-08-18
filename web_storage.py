@@ -222,10 +222,14 @@ def serialize_value(value: Any) -> Any:
         return {
             "__type__": "dataframe",
             "columns": list(value.columns),
-            "records": value.to_dict(orient="records"),
+            "records": serialize_value(value.to_dict(orient="records")),
         }
     if isinstance(value, pd.Series):
-        return {"__type__": "series", "name": value.name, "data": value.to_dict()}
+        return {
+            "__type__": "series",
+            "name": serialize_value(value.name),
+            "data": serialize_value(value.to_dict()),
+        }
     if isinstance(value, (date, datetime)):
         return {
             "__type__": "datetime",

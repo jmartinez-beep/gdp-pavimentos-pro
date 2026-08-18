@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pandas as pd
@@ -92,3 +93,25 @@ def test_project_fingerprint_is_stable_and_detects_changes():
 
     assert web_storage.project_state_fingerprint(state_a) == web_storage.project_state_fingerprint(state_b)
     assert web_storage.project_state_fingerprint(state_a) != web_storage.project_state_fingerprint(state_c)
+
+
+def test_scenario_payload_with_dataframes_is_json_serializable():
+    payload = {
+        "scenarios": {
+            "tomo1": {
+                "vehicles": pd.DataFrame(
+                    [["Camión C2", 152.5]], columns=["Categoría", "TPD"]
+                ),
+                "cbr_values": pd.DataFrame(
+                    [[7.2, pd.Timestamp("2026-08-18")]], columns=["CBR", "Fecha"]
+                ),
+            },
+            "tomo2": {"selected_row": {"Código": "EBE-2"}},
+        }
+    }
+
+    encoded = json.dumps(web_storage.serialize_value(payload), ensure_ascii=False)
+    decoded = json.loads(encoded)
+
+    assert decoded["scenarios"]["tomo1"]["vehicles"]["__type__"] == "dataframe"
+    assert decoded["scenarios"]["tomo1"]["cbr_values"]["records"][0]["Fecha"] == "2026-08-18T00:00:00"
