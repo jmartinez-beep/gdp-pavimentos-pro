@@ -225,7 +225,14 @@ new_payload = '''        "active_tomo": active_tomo,
         "traceability": selected_trace(selected_row),
         "flex_design": st.session_state.get("flex_design", {}),
 '''
-replace_once(old_payload, new_payload, "report payload traceability")
+if (
+    '        "gdp_tomo2": st.session_state.get("tomo2_result", {}) if active_tomo == "Tomo II" else {},\n'
+    in text
+    and '        "traceability": selected_trace(selected_row),\n' in text
+):
+    print("report payload traceability: already applied")
+else:
+    replace_once(old_payload, new_payload, "report payload traceability")
 
 old_validation = '''        st.dataframe(validation_df,use_container_width=True,hide_index=True)
         st.download_button("Descargar matriz de validación (CSV)",validation_df.to_csv(index=False).encode("utf-8-sig"),"matriz_validacion_gdp.csv","text/csv")
