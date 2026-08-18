@@ -57,6 +57,17 @@ def merge_segment_coordinate_snapshot(
     return result
 
 
+def update_segment_coordinate_snapshot(
+    saved: object, field: str, value: object
+) -> dict[str, float]:
+    """Update exactly one durable segment coordinate without touching the rest."""
+    result = merge_segment_coordinate_snapshot(saved, {})
+    if field not in SEGMENT_COORDINATE_KEYS:
+        raise ValueError(f"Coordenada de tramo desconocida: {field}")
+    result[field] = float(value)
+    return result
+
+
 def is_ephemeral_state_key(key: object) -> bool:
     """Return True for widget-owned state that must not be restored directly."""
     text = str(key)
