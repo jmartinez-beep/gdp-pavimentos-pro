@@ -22,6 +22,7 @@ def test_persistent_project_data_is_not_filtered():
 def test_editor_is_removed_during_restore_but_open_button_is_preserved():
     assert not is_active_control_key("project_geo_points_editor")
     assert is_active_control_key("main_open_project")
+    assert is_active_control_key("main_new_project")
 
 
 def test_autosave_runtime_metadata_is_not_persisted():

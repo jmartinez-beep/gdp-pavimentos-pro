@@ -5,7 +5,7 @@ EPHEMERAL_STATE_KEYS = {
     "auth_user", "auth_view", "login_user", "login_password", "reg_user", "reg_name", "reg_password",
     "project_save_name", "project_pick", "confirm_delete_project", "_loaded_project_notice",
     "main_project_save_name", "main_project_search", "main_project_pick", "main_confirm_delete_project",
-    "main_save_project", "main_open_project", "main_delete_project",
+    "main_save_project", "main_new_project", "main_open_project", "main_delete_project",
     "run_screening_optimization", "evaluate_tomo2_in_tomo1",
     "apply_nearby_tomo2_period", "evaluate_unassigned_tomo2_in_tomo1",
     "_pending_active_tomo", "_pending_tomo1_import", "_pending_tomo2_design_period",
@@ -17,7 +17,7 @@ ACTIVE_CONTROL_KEYS = {
     "auth_user", "auth_view", "login_user", "login_password", "reg_user", "reg_name", "reg_password",
     "project_save_name", "project_pick", "confirm_delete_project", "_loaded_project_notice",
     "main_project_save_name", "main_project_search", "main_project_pick", "main_confirm_delete_project",
-    "main_save_project", "main_open_project", "main_delete_project",
+    "main_save_project", "main_new_project", "main_open_project", "main_delete_project",
 }
 
 TOMO2_CATALOG_PREFIXES = ("EBE-", "EBG-", "ETS-")
