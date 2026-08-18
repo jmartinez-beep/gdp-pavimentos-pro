@@ -18,6 +18,9 @@ def test_parse_power_climatology_builds_traceable_catalog_entry():
     assert result["annual_c"] == pytest.approx(20.55)
     assert result["latitude"] == CLIMATE_ZONES["Cartago"][0]
     assert "NASA POWER" in result["source"]
+    assert result["parameters"] == ["T2M", "PRECTOTCORR"]
+    assert "0.5°" in result["spatial_resolution"]
+    assert "no es una medición" in result["data_type"]
 
 
 def test_parse_power_climatology_rejects_missing_months():
