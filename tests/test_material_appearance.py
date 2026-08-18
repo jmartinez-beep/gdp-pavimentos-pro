@@ -1,4 +1,4 @@
-from material_appearance import material_description, material_kind, material_style
+from material_appearance import aggregate_particle_style, material_description, material_kind, material_style
 
 
 def test_each_structural_material_has_a_distinct_kind():
@@ -14,3 +14,11 @@ def test_styles_are_visually_independent_and_documented():
     assert len({style["edge"] for style in styles}) == 3
     assert "angular" in material_description("Base granular")
     assert "uniforme" in material_description("Base estabilizada")
+
+
+def test_subbase_aggregate_is_coarser_than_base_aggregate():
+    base = aggregate_particle_style("Base granular")
+    subbase = aggregate_particle_style("Subbase granular")
+    assert subbase["size"][0] > base["size"][0]
+    assert subbase["size"][1] > base["size"][1]
+    assert base["count_factor"] > subbase["count_factor"]
