@@ -2409,21 +2409,7 @@ with p1:
     # actualiza atómicamente desde el on_change de cada coordenada.
     segment_coordinates = st.session_state.get("project_segment_coordinates", {})
 
-    main_project_line = []
-    alignment_mode = "Línea directa"
-    if geometry_mode == "Punto único":
-        base_geo_points = pd.DataFrame([{
-            "Nombre": "Punto principal",
-            "Tipo": "Proyecto",
-            "Sistema": "WGS84",
-            "Este_CRTM05": float(crtm_easting),
-            "Norte_CRTM05": float(crtm_northing),
-            "Latitud": float(latitude),
-            "Longitud": float(longitude),
-            "Descripción": str(location),
-        }])
-    else:
-        st.markdown("##### Coordenadas del tramo")
+    def render_segment_coordinate_inputs():
         segment_system = st.segmented_control(
             "Sistema para inicio y fin", ["WGS84", "CRTM05"],
             default=st.session_state.get("project_segment_system", "WGS84"),
@@ -2453,6 +2439,29 @@ with p1:
             "start_e": float(start_e), "start_n": float(start_n),
             "end_e": float(end_e), "end_n": float(end_n),
         }
+        return start_lat, start_lon, end_lat, end_lon, start_e, start_n, end_e, end_n
+
+    main_project_line = []
+    alignment_mode = "Línea directa"
+    if geometry_mode == "Punto único":
+        # El contenido de un expander cerrado continúa renderizado. Esto evita
+        # que Streamlit elimine los widgets y sus valores al ocultar el tramo.
+        with st.expander("Coordenadas del tramo guardadas", expanded=False):
+            st.caption("Se conservan para cuando vuelva a seleccionar Tramo (inicio–fin).")
+            render_segment_coordinate_inputs()
+        base_geo_points = pd.DataFrame([{
+            "Nombre": "Punto principal",
+            "Tipo": "Proyecto",
+            "Sistema": "WGS84",
+            "Este_CRTM05": float(crtm_easting),
+            "Norte_CRTM05": float(crtm_northing),
+            "Latitud": float(latitude),
+            "Longitud": float(longitude),
+            "Descripción": str(location),
+        }])
+    else:
+        st.markdown("##### Coordenadas del tramo")
+        start_lat, start_lon, end_lat, end_lon, start_e, start_n, end_e, end_n = render_segment_coordinate_inputs()
 
         alignment_mode = st.radio(
             "Trazado del eje",
