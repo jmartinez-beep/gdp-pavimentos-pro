@@ -77,6 +77,7 @@ def is_ephemeral_state_key(key: object) -> bool:
         or text.startswith("download_")
         or text.endswith("_editor")
         or text.startswith("climate_monthly_editor_")
+        or text.startswith("climate_tmi_editor_")
     )
 
 
