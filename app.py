@@ -35,6 +35,7 @@ from project_state import (
     tomo1_structure_identifier,
 )
 from construction_costs import cost_summary, quantity_rows
+from material_appearance import material_description, material_style
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -883,27 +884,8 @@ def _box_mesh(x0: float, x1: float, y0: float, y1: float, z0: float, z1: float, 
 
 
 def _material_style(name: str):
-    """Paletas inspiradas en un corte vial real: asfalto gris, agregado pétreo, subbase clara y suelo natural."""
-    n = name.lower()
-    if "asf" in n or "tratamiento" in n or "superficie" in n:
-        return dict(
-            palette=[[0.0,"#17191a"],[0.20,"#252829"],[0.45,"#343839"],[0.70,"#484c4c"],[0.90,"#606363"],[1.0,"#777976"]],
-            seed=11, kind="asphalt", edge="#111415", rough=0.035
-        )
-    if "base granular" in n:
-        return dict(
-            palette=[[0.0,"#596166"],[0.20,"#6d777c"],[0.45,"#849095"],[0.70,"#9ba6aa"],[0.90,"#b3bcbf"],[1.0,"#c8cecf"]],
-            seed=23, kind="base", edge="#394247", rough=0.11
-        )
-    if "subbase" in n:
-        return dict(
-            palette=[[0.0,"#8a633e"],[0.20,"#9d7650"],[0.45,"#b28d67"],[0.70,"#c6a57e"],[0.90,"#d8ba96"],[1.0,"#e5cba9"]],
-            seed=37, kind="subbase", edge="#67462d", rough=0.12
-        )
-    return dict(
-        palette=[[0.0,"#573522"],[0.20,"#6b432b"],[0.45,"#80563a"],[0.70,"#956b4b"],[0.90,"#aa8261"],[1.0,"#bc9978"]],
-        seed=51, kind="soil", edge="#382116", rough=0.09
-    )
+    """Paleta esquemática diferenciada por familia de material."""
+    return material_style(name)
 
 
 def _hash_noise(U, V, seed: int):
@@ -959,16 +941,23 @@ def _material_field(U, V, name: str, seed: int):
         pale=np.where(_hash_noise(u*257,v*239,seed+4)>.973,.28,0.0)
         dark=np.where(_hash_noise(u*191,v*203,seed+7)>.960,-.10,0.0)
         return np.clip(macro+fine+pale+dark,0,1)
+    if "base estabilizada" in n or "suelo cemento" in n:
+        # Material tratado: matriz continua, fina y de baja rugosidad; no parece agregado suelto.
+        fine=.50+.045*np.sin(u*13+v*8)+.025*np.cos(u*31-v*19)
+        pores=np.where(_hash_noise(u*173,v*167,seed+12)>.982,-.10,0.0)
+        grains=(_hash_noise(u*97,v*103,seed+5)-.5)*.045
+        return np.clip(fine+grains+pores,0,1)
+    if "subbase" in n:
+        # Subbase gris-marrón: agregado de mayor variación aparente y matriz con finos.
+        stone=_stone_field(U,V,seed,16,9,0.01)
+        matrix=.070*np.sin(u*15+v*8)+.045*np.cos(u*27-v*15)
+        patches=np.where(_hash_noise(u*61,v*67,seed+14)>.91,.08,-.015)
+        return np.clip(.10+stone*.78+matrix+patches,0,1)
     if "base granular" in n:
         # Base de agregado triturado gris: densa, angular y con finos claros entre partículas.
         stone=_stone_field(U,V,seed,25,16,0.0)
         fines=.045*_hash_noise(u*119,v*127,seed+9)
         return np.clip(stone+fines+.04,0,1)
-    if "subbase" in n:
-        # Subbase seleccionada clara/amarillenta, con agregado de tamaño medio y matriz granular.
-        stone=_stone_field(U,V,seed,18,11,0.02)
-        matrix=.055*np.sin(u*16+v*9)+.035*np.cos(u*29-v*17)
-        return np.clip(.13+stone*.82+matrix,0,1)
     # Subrasante: suelo natural marrón, estratificado y heterogéneo como un corte de terreno.
     rnd=_hash_noise(u*71,v*79,seed)
     strata=.42+.12*np.sin(v*22+1.25*np.sin(u*5.2))+.065*np.cos(u*11-v*4.5)
@@ -1009,12 +998,12 @@ def _textured_box(x0: float, x1: float, y0: float, y1: float, z0: float, z1: flo
 
     X,Z=np.meshgrid(xs,zs); Cxz=_material_field(X,Z,name,style['seed']+3)
     # Laterales ligeramente más estratificados como en un corte real.
-    strat=.035*np.sin((Z-z0)/(z1-z0+1e-9)*np.pi*10) if style['kind']!='asphalt' else 0
+    strat=.035*np.sin((Z-z0)/(z1-z0+1e-9)*np.pi*10) if style['kind'] not in ('asphalt','stabilized_base') else 0
     add_surface(X,np.full_like(X,y0),Z,np.clip(Cxz+strat,0,1))
     add_surface(X,np.full_like(X,y1),Z,np.clip(Cxz*.96+strat+.015,0,1))
 
     Y,Z=np.meshgrid(ys,zs); Cyz=_material_field(Y,Z,name,style['seed']+7)
-    strat2=.035*np.sin((Z-z0)/(z1-z0+1e-9)*np.pi*9) if style['kind']!='asphalt' else 0
+    strat2=.035*np.sin((Z-z0)/(z1-z0+1e-9)*np.pi*9) if style['kind'] not in ('asphalt','stabilized_base') else 0
     add_surface(np.full_like(Y,x0),Y,Z,np.clip(Cyz+strat2,0,1))
     add_surface(np.full_like(Y,x1),Y,Z,np.clip(Cyz*.94+strat2+.02,0,1))
 
@@ -1038,12 +1027,15 @@ def _aggregate_particles(x0: float, x1: float, y0: float, y1: float, z0: float, 
     if "asf" in n or "tratamiento" in n or "superficie" in n:
         count=int(count*1.20); size=(.40,1.15); seed=111; opacity=.38
         colors=[[0,"#202121"],[.30,"#484a49"],[.58,"#747570"],[.82,"#aaa89f"],[1,"#e2ded3"]]; symbol='circle'
+    elif "base estabilizada" in n or "suelo cemento" in n:
+        count=int(count*.35); size=(.25,.75); seed=229; opacity=.22
+        colors=[[0,"#5c5d59"],[.45,"#85867f"],[.75,"#a5a59b"],[1,"#c2c1b5"]]; symbol='circle'
+    elif "subbase" in n:
+        count=int(count*.78); size=(.60,1.95); seed=337; opacity=.50
+        colors=[[0,"#5b5046"],[.28,"#786b5d"],[.56,"#978777"],[.82,"#b8aa98"],[1,"#ddd4c5"]]; symbol='diamond'
     elif "base granular" in n:
         count=int(count*.90); size=(.55,1.80); seed=223; opacity=.52
         colors=[[0,"#414346"],[.28,"#666a6e"],[.56,"#8b9195"],[.82,"#bec3c4"],[1,"#eceeea"]]; symbol='diamond'
-    elif "subbase" in n:
-        count=int(count*.78); size=(.60,1.95); seed=337; opacity=.50
-        colors=[[0,"#78642d"],[.28,"#9a8240"],[.56,"#bea65d"],[.82,"#dccb8a"],[1,"#f2e5b5"]]; symbol='diamond'
     else:
         count=int(count*.82); size=(.30,1.00); seed=451; opacity=.28
         colors=[[0,"#3c281a"],[.40,"#654830"],[.70,"#937054"],[1,"#c3a586"]]; symbol='circle'
@@ -1208,7 +1200,8 @@ def pavement_3d_figure(
     label_count = max(len(layers), 1)
     for index, layer in enumerate(layers):
         is_subgrade = (not layer.get("normative", True)) and "Subrasante" in layer["name"]
-        detail = "Medio de apoyo" if is_subgrade else f"{float(layer['thickness']):.1f} cm"
+        thickness_detail = "Medio de apoyo" if is_subgrade else f"{float(layer['thickness']):.1f} cm"
+        detail = f"{thickness_detail}<br><span style='color:#a9bdca'>{material_description(layer['name'])}</span>"
         label_annotations.append(dict(
             x=.825, y=.84-index*(.64/max(label_count-1, 1)), xref="paper", yref="paper",
             text=f"<b>{layer['name']}</b><br>{detail}", showarrow=False,
@@ -1220,6 +1213,11 @@ def pavement_3d_figure(
         x=.825, y=.08, xref="paper", yref="paper",
         text=f"<span style='color:#9fb5c5'>Subrasante: CBR {cbr:.2f}%</span>",
         showarrow=False, xanchor="left", align="left", font=dict(size=10, color="#9fb5c5"),
+    ))
+    label_annotations.append(dict(
+        x=.825, y=.025, xref="paper", yref="paper",
+        text="<span style='color:#7f94a3'>Texturas esquemáticas; no representan granulometría ni procedencia real.</span>",
+        showarrow=False, xanchor="left", align="left", font=dict(size=9, color="#7f94a3"),
     ))
 
     fig = go.Figure(data=traces)
