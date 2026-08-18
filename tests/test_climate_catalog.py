@@ -1,6 +1,9 @@
 import pytest
 
-from climate_catalog import CLIMATE_ZONES, parse_power_climatology
+from climate_catalog import (
+    CLIMATE_ZONES, parse_power_climatology, parse_power_point_climatology,
+    project_climate_point,
+)
 
 
 def test_parse_power_climatology_builds_traceable_catalog_entry():
@@ -20,3 +23,27 @@ def test_parse_power_climatology_builds_traceable_catalog_entry():
 def test_parse_power_climatology_rejects_missing_months():
     with pytest.raises(KeyError):
         parse_power_climatology({"properties": {"parameter": {"T2M": {"JAN": 20.0}}}}, "Cartago")
+
+
+def test_parse_power_point_climatology_preserves_project_coordinates():
+    monthly = {key: 20.0 + index for index, key in enumerate(
+        ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+    )}
+    result = parse_power_point_climatology(
+        {"properties": {"parameter": {"T2M": monthly}}},
+        9.75543,
+        -84.16021,
+        "Coordenadas del proyecto (NASA POWER)",
+    )
+    assert result["latitude"] == 9.75543
+    assert result["longitude"] == -84.16021
+    assert result["zone"] == "Coordenadas del proyecto (NASA POWER)"
+    assert "coordenadas WGS84" in result["source"]
+
+
+def test_project_climate_point_uses_segment_midpoint():
+    point = project_climate_point(
+        {"geometry_mode": "Tramo (inicio–fin)", "latitude": 9.0, "longitude": -84.0},
+        {"start_lat": 9.7, "start_lon": -84.2, "end_lat": 9.8, "end_lon": -84.1},
+    )
+    assert point == (9.75, -84.15, "Punto medio del tramo")

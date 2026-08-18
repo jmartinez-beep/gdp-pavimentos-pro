@@ -18,7 +18,10 @@ from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
-from climate_catalog import CLIMATE_ZONES, fetch_zone_climatology
+from climate_catalog import (
+    CLIMATE_ZONES, fetch_point_climatology, fetch_zone_climatology,
+    project_climate_point,
+)
 from cr2020_asphalt import render_asphalt_cr2020_checklist
 from structural_number import DEFAULT_LAYER_COEFFICIENTS, structural_number_breakdown
 from road_alignment import RoadAlignmentError, road_route
@@ -1754,18 +1757,37 @@ th,td{{border:1px solid #cbd5df;padding:8px;text-align:left}} th{{background:#ee
 
 
 CLIMATE_STATIONS_TOMO_II = list(CLIMATE_ZONES)
+PROJECT_CLIMATE_OPTION = "Coordenadas del proyecto (NASA POWER)"
+
+
+def current_project_climate_point() -> tuple[float, float, str]:
+    project_map = st.session_state.get("project_map", {})
+    project_map.setdefault("latitude", float(latitude))
+    project_map.setdefault("longitude", float(longitude))
+    return project_climate_point(
+        project_map,
+        st.session_state.get("project_segment_coordinates", {}),
+    )
 
 
 def load_climate_zone_to_state() -> None:
-    zone = st.session_state.get("climate_station_selected", "San José")
+    zone = st.session_state.get("climate_station_selected", PROJECT_CLIMATE_OPTION)
     if zone == "Otra / dato propio":
         st.session_state.climate_catalog_status = "manual"
+        st.session_state.pop("climate_catalog", None)
         return
     try:
-        catalog = fetch_zone_climatology(zone)
+        if zone == PROJECT_CLIMATE_OPTION:
+            climate_lat, climate_lon, geometry_label = current_project_climate_point()
+            catalog = fetch_point_climatology(climate_lat, climate_lon, PROJECT_CLIMATE_OPTION)
+            catalog["geometry_label"] = geometry_label
+        else:
+            catalog = fetch_zone_climatology(zone)
+            catalog["geometry_label"] = "Punto representativo de zona"
     except Exception as exc:
         st.session_state.climate_catalog_status = "error"
         st.session_state.climate_catalog_error = str(exc)
+        st.session_state.pop("climate_catalog", None)
         return
     st.session_state.climate_catalog = catalog
     st.session_state.climate_catalog_status = "loaded"
@@ -2897,14 +2919,29 @@ with pclima:
     ) or "Estación documentada"
 
     if "climate_station_selected" not in st.session_state:
-        st.session_state.climate_station_selected = "San José"
+        st.session_state.climate_station_selected = PROJECT_CLIMATE_OPTION
+        load_climate_zone_to_state()
+
+    selected_climate_option = st.session_state.climate_station_selected
+    # Si cambian las coordenadas, renueva automáticamente el catálogo del proyecto.
+    if selected_climate_option == PROJECT_CLIMATE_OPTION:
+        climate_lat, climate_lon, geometry_label = current_project_climate_point()
+        climate_signature = (round(climate_lat, 5), round(climate_lon, 5), geometry_label)
+        if st.session_state.get("climate_project_signature") != climate_signature:
+            load_climate_zone_to_state()
+            st.session_state.climate_project_signature = climate_signature
+    elif (
+        selected_climate_option != "Otra / dato propio"
+        and st.session_state.get("climate_catalog", {}).get("zone") != selected_climate_option
+    ):
+        # Corrige estados restaurados donde el selector y el catálogo no coinciden.
         load_climate_zone_to_state()
 
     c1, c2, c3 = st.columns(3)
     with c1:
         station_selected = st.selectbox(
             "Estación o zona representativa",
-            CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"],
+            [PROJECT_CLIMATE_OPTION] + CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"],
             key="climate_station_selected",
             on_change=load_climate_zone_to_state,
         )
@@ -2948,7 +2985,8 @@ with pclima:
     elif catalog_matches_zone:
         st.success(
             f"Climatología cargada automáticamente para {station_selected}: "
-            f"{catalog['latitude']:.3f}, {catalog['longitude']:.3f}."
+            f"{catalog['latitude']:.5f}, {catalog['longitude']:.5f} "
+            f"({catalog.get('geometry_label', 'punto consultado')})."
         )
 
     if climate_input_mode == "Valores mensuales":
