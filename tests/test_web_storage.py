@@ -31,6 +31,18 @@ def test_sqlite_user_and_project_roundtrip(tmp_path):
             [["Camión C2", 0.8, 35]],
             columns=["Categoría", "Factor camión", "TPD"],
         ),
+        "tomo_scenarios": {
+            "tomo1": {
+                "growth_pct": 7.1,
+                "subgrade": {"cbr": 7.2, "liquid_limit_pct": 35.0},
+                "vehicles": pd.DataFrame([[100.0]], columns=["TPD"]),
+            },
+            "tomo2": {
+                "growth_pct": 3.0,
+                "subgrade": {"cbr": 5.0, "liquid_limit_pct": 20.0},
+                "vehicles": pd.DataFrame([[200.0]], columns=["TPD"]),
+            },
+        },
     }
 
     web_storage.save_project(user["id"], "Ruta piloto", state)
@@ -44,6 +56,10 @@ def test_sqlite_user_and_project_roundtrip(tmp_path):
     assert restored["project_date"] == date(2026, 8, 10)
     assert restored["selected_row"]["Código"] == "EBG-2"
     assert restored["vehicles"].iloc[0]["TPD"] == 35
+    assert restored["tomo_scenarios"]["tomo1"]["subgrade"]["cbr"] == 7.2
+    assert restored["tomo_scenarios"]["tomo2"]["subgrade"]["cbr"] == 5.0
+    assert restored["tomo_scenarios"]["tomo1"]["vehicles"].iloc[0]["TPD"] == 100.0
+    assert restored["tomo_scenarios"]["tomo2"]["vehicles"].iloc[0]["TPD"] == 200.0
 
 
 def test_save_same_name_updates_project(tmp_path):

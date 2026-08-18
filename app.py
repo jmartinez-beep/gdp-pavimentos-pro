@@ -2259,9 +2259,18 @@ with head_mid:
 st.caption("Puede cambiar de tomo sin perder los datos del proyecto guardados en la sesión.")
 
 # Valores compartidos entre módulos
-selected_row = st.session_state.get("selected_row")
-total_thickness = float(st.session_state.get("total_thickness", 0.0))
-exact_match = bool(st.session_state.get("exact_match", False))
+scenario_slug = "tomo1" if active_tomo == "Tomo I" else "tomo2"
+tomo_scenarios = dict(st.session_state.get("tomo_scenarios", {}))
+active_scenario = dict(tomo_scenarios.get(scenario_slug, {}))
+if scenario_slug in tomo_scenarios:
+    selected_row = active_scenario.get("selected_row")
+    total_thickness = float(active_scenario.get("total_thickness", 0.0) or 0.0)
+    exact_match = bool(active_scenario.get("exact_match", False))
+else:
+    # Migración transparente de proyectos creados antes de separar escenarios.
+    selected_row = st.session_state.get("selected_row")
+    total_thickness = float(st.session_state.get("total_thickness", 0.0) or 0.0)
+    exact_match = bool(st.session_state.get("exact_match", False))
 
 # Pestañas
 pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvalid, pcr2010, pexport, p6 = st.tabs([
@@ -2272,13 +2281,13 @@ pdash, p1, p2, p3, pclima, p4, pflex, pperf, pcompare, p5, pmaint, pdrain, pvali
 with p1:
     c1, c2 = st.columns(2)
     with c1:
-        project_name = st.text_input("Nombre del proyecto", "Proyecto vial")
-        location = st.text_input("Ubicación", "Costa Rica")
-        engineer = st.text_input("Profesional responsable", "")
+        project_name = st.text_input("Nombre del proyecto", "Proyecto vial", key="project_name_input")
+        location = st.text_input("Ubicación", "Costa Rica", key="project_location_input")
+        engineer = st.text_input("Profesional responsable", "", key="project_engineer_input")
     with c2:
-        project_date = st.date_input("Fecha", date.today())
-        road_type = st.selectbox("Tipo de vía", ["Camino de bajo volumen", "Urbanización", "Vía local", "Otro"])
-        pavement_type = st.selectbox("Tipo de pavimento", ["Flexible", "Semirrígido", "Por definir"])
+        project_date = st.date_input("Fecha", date.today(), key="project_date_input")
+        road_type = st.selectbox("Tipo de vía", ["Camino de bajo volumen", "Urbanización", "Vía local", "Otro"], key="project_road_type_input")
+        pavement_type = st.selectbox("Tipo de pavimento", ["Flexible", "Semirrígido", "Por definir"], key="project_pavement_type_input")
 
     # DESIGN_DATA_PHASE1
     st.markdown("### Geometría y configuración funcional del tramo")
@@ -2663,7 +2672,8 @@ with p2:
         "El **Factor camión** es un parámetro técnico independiente utilizado para convertir cada categoría a ejes equivalentes; para pickup/carga liviana debe usarse el valor documentado por el estudio o proyecto."
     )
 
-    current = st.session_state.vehicles.copy()
+    scenario_vehicles = active_scenario.get("vehicles")
+    current = scenario_vehicles.copy() if isinstance(scenario_vehicles, pd.DataFrame) else st.session_state.vehicles.copy()
 
     # Compatibilidad con proyectos guardados antes de separar pickup/carga liviana.
     if "Grupo de tránsito" not in current.columns:
@@ -2711,7 +2721,7 @@ with p2:
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
-        key="vehicle_composition_editor",
+        key=f"vehicle_composition_{scenario_slug}_editor",
         column_config={
             "Categoría": st.column_config.TextColumn(
                 "Categoría vehicular",
@@ -2752,6 +2762,8 @@ with p2:
     vehicles = edited_vehicles.rename(columns={"Cantidad diaria (veh/día)": "TPD"})[
         ["Categoría", "Grupo de tránsito", "Factor camión", "TPD"]
     ]
+    # Compatibilidad: `vehicles` sigue apuntando al escenario visible, mientras
+    # cada tomo conserva su propia composición dentro de `tomo_scenarios`.
     st.session_state.vehicles = vehicles
 
     with st.expander("¿Cuál es la diferencia entre cantidad diaria y factor camión?"):
@@ -2768,19 +2780,22 @@ with p2:
             pending_tomo2_period = st.session_state.pop("_pending_tomo2_design_period", None)
             if pending_tomo2_period in (6, 8, 10, 12):
                 st.session_state.tomo2_design_period = int(pending_tomo2_period)
+            tomo2_periods = [6, 8, 10, 12]
+            saved_period = int(active_scenario.get("years", 10))
             years = st.selectbox(
-                "Periodo de diseño Tomo II (años)", [6, 8, 10, 12], index=2,
+                "Periodo de diseño Tomo II (años)", tomo2_periods,
+                index=tomo2_periods.index(saved_period) if saved_period in tomo2_periods else 2,
                 key="tomo2_design_period",
                 help="GDP-2024 Tomo II: selección directa de catálogo para 6, 8, 10 o 12 años, sin interpolación."
             )
         else:
-            years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=10, key="tomo1_design_period")
+            years = st.number_input("Periodo de diseño (años)", min_value=1, max_value=40, value=int(active_scenario.get("years", 10)), key="tomo1_design_period")
     with b:
-        growth_pct = st.number_input("Crecimiento anual (%)", min_value=0.0, max_value=20.0, value=3.0, step=0.1)
+        growth_pct = st.number_input("Crecimiento anual (%)", min_value=0.0, max_value=20.0, value=float(active_scenario.get("growth_pct", 3.0)), step=0.1, key=f"{scenario_slug}_growth_pct")
     with c:
-        direction_factor = st.number_input("Factor direccional", min_value=0.1, max_value=1.0, value=0.50, step=0.05)
+        direction_factor = st.number_input("Factor direccional", min_value=0.1, max_value=1.0, value=float(active_scenario.get("direction_factor", 0.50)), step=0.05, key=f"{scenario_slug}_direction_factor")
     with d:
-        lane_factor = st.number_input("Factor de carril", min_value=0.1, max_value=1.0, value=1.00, step=0.05)
+        lane_factor = st.number_input("Factor de carril", min_value=0.1, max_value=1.0, value=float(active_scenario.get("lane_factor", 1.00)), step=0.05, key=f"{scenario_slug}_lane_factor")
 
     weighted_daily = float((vehicles["TPD"] * vehicles["Factor camión"]).sum())
     tpd_total = float(vehicles["TPD"].sum())
@@ -2834,18 +2849,27 @@ with p2:
 
 with p3:
     st.subheader("Caracterización de la subrasante")
-    mode = st.radio("Entrada de CBR", ["Valor único", "Serie de ensayos"], horizontal=True)
+    saved_subgrade = dict(active_scenario.get("subgrade", {}))
+    cbr_modes = ["Valor único", "Serie de ensayos"]
+    saved_cbr_mode = str(active_scenario.get("cbr_mode", "Valor único"))
+    mode = st.radio(
+        "Entrada de CBR", cbr_modes, horizontal=True,
+        index=cbr_modes.index(saved_cbr_mode) if saved_cbr_mode in cbr_modes else 0,
+        key=f"{scenario_slug}_cbr_mode",
+    )
     if mode == "Valor único":
-        cbr_design = st.number_input("CBR de diseño (%)", min_value=0.1, max_value=100.0, value=5.0, step=0.1)
+        cbr_design = st.number_input("CBR de diseño (%)", min_value=0.1, max_value=100.0, value=float(saved_subgrade.get("cbr", 5.0)), step=0.1, key=f"{scenario_slug}_cbr_design")
         cbr_series = pd.DataFrame({"CBR (%)": [cbr_design]})
     else:
+        saved_cbr_series = active_scenario.get("cbr_series")
+        cbr_seed = saved_cbr_series.copy() if isinstance(saved_cbr_series, pd.DataFrame) else pd.DataFrame({"CBR (%)": [4.2, 5.0, 5.6, 6.1, 4.8]})
         cbr_series = st.data_editor(
-            pd.DataFrame({"CBR (%)": [4.2, 5.0, 5.6, 6.1, 4.8]}),
+            cbr_seed,
             num_rows="dynamic",
             use_container_width=True,
-            key="cbr_editor",
+            key=f"{scenario_slug}_cbr_editor",
         )
-        percentile = st.slider("Percentil conservador para diseño", 5, 50, 10, 5)
+        percentile = st.slider("Percentil conservador para diseño", 5, 50, int(active_scenario.get("cbr_percentile", 10)), 5, key=f"{scenario_slug}_cbr_percentile")
         valid = pd.to_numeric(cbr_series["CBR (%)"], errors="coerce").dropna()
         cbr_design = float(valid.quantile(percentile / 100.0)) if not valid.empty else 0.0
 
@@ -2863,16 +2887,18 @@ with p3:
 
     st.markdown("#### Caracterización geotécnica complementaria")
     sg1, sg2, sg3, sg4 = st.columns(4)
-    soil_sucs = sg1.text_input("Clasificación SUCS", value="", key="subgrade_sucs")
-    soil_aashto = sg2.text_input("Clasificación AASHTO", value="", key="subgrade_aashto")
-    liquid_limit = sg3.number_input("Límite líquido LL (%)", min_value=0.0, max_value=150.0, value=0.0, step=1.0, key="subgrade_ll")
-    plasticity_index = sg4.number_input("Índice plástico IP (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="subgrade_pi")
+    soil_sucs = sg1.text_input("Clasificación SUCS", value=str(saved_subgrade.get("sucs", "")), key=f"{scenario_slug}_subgrade_sucs")
+    soil_aashto = sg2.text_input("Clasificación AASHTO", value=str(saved_subgrade.get("aashto", "")), key=f"{scenario_slug}_subgrade_aashto")
+    liquid_limit = sg3.number_input("Límite líquido LL (%)", min_value=0.0, max_value=150.0, value=float(saved_subgrade.get("liquid_limit_pct", 0.0)), step=1.0, key=f"{scenario_slug}_subgrade_ll")
+    plasticity_index = sg4.number_input("Índice plástico IP (%)", min_value=0.0, max_value=100.0, value=float(saved_subgrade.get("plasticity_index_pct", 0.0)), step=1.0, key=f"{scenario_slug}_subgrade_pi")
     sg5, sg6, sg7, sg8 = st.columns(4)
-    natural_moisture = sg5.number_input("Humedad natural (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="subgrade_moisture")
-    max_dry_density = sg6.number_input("Densidad seca máxima (kg/m³)", min_value=0.0, max_value=3000.0, value=0.0, step=10.0, key="subgrade_mdd")
-    subgrade_water_table = sg7.number_input("Nivel freático investigado (m)", min_value=0.0, max_value=50.0, value=2.0, step=0.1, key="subgrade_water_table")
-    mr_source = sg8.selectbox("Fuente del módulo resiliente", ["Estimado a partir del CBR", "Ensayo de laboratorio/campo", "Valor documentado del proyecto"], key="subgrade_mr_source")
-    measured_mr = st.number_input("Módulo resiliente documentado Mr (MPa, 0 = usar estimación por CBR)", min_value=0.0, max_value=2000.0, value=0.0, step=1.0, key="subgrade_measured_mr")
+    natural_moisture = sg5.number_input("Humedad natural (%)", min_value=0.0, max_value=100.0, value=float(saved_subgrade.get("natural_moisture_pct", 0.0)), step=0.5, key=f"{scenario_slug}_subgrade_moisture")
+    max_dry_density = sg6.number_input("Densidad seca máxima (kg/m³)", min_value=0.0, max_value=3000.0, value=float(saved_subgrade.get("max_dry_density_kg_m3", 0.0)), step=10.0, key=f"{scenario_slug}_subgrade_mdd")
+    subgrade_water_table = sg7.number_input("Nivel freático investigado (m)", min_value=0.0, max_value=50.0, value=float(saved_subgrade.get("water_table_m", 2.0)), step=0.1, key=f"{scenario_slug}_subgrade_water_table")
+    mr_options = ["Estimado a partir del CBR", "Ensayo de laboratorio/campo", "Valor documentado del proyecto"]
+    saved_mr_source = str(saved_subgrade.get("mr_source", mr_options[0]))
+    mr_source = sg8.selectbox("Fuente del módulo resiliente", mr_options, index=mr_options.index(saved_mr_source) if saved_mr_source in mr_options else 0, key=f"{scenario_slug}_subgrade_mr_source")
+    measured_mr = st.number_input("Módulo resiliente documentado Mr (MPa, 0 = usar estimación por CBR)", min_value=0.0, max_value=2000.0, value=float(saved_subgrade.get("measured_mr_mpa", 0.0)), step=1.0, key=f"{scenario_slug}_subgrade_measured_mr")
     mr = float(measured_mr) if measured_mr > 0 and mr_source != "Estimado a partir del CBR" else float(mr_estimated)
 
     x1, x2, x3, x4 = st.columns(4)
@@ -2885,7 +2911,20 @@ with p3:
         "plasticity_index_pct": float(plasticity_index), "natural_moisture_pct": float(natural_moisture),
         "max_dry_density_kg_m3": float(max_dry_density), "water_table_m": float(subgrade_water_table),
         "mr_estimated_mpa": float(mr_estimated), "mr_design_mpa": float(mr), "mr_source": mr_source,
+        "measured_mr_mpa": float(measured_mr),
     }
+    # Cada metodología mantiene su propio escenario dentro del mismo proyecto.
+    tomo_scenarios = dict(st.session_state.get("tomo_scenarios", {}))
+    scenario_state = dict(tomo_scenarios.get(scenario_slug, {}))
+    scenario_state.update({
+        "tomo": active_tomo, "vehicles": vehicles.copy(), "years": int(years),
+        "growth_pct": float(growth_pct), "direction_factor": float(direction_factor),
+        "lane_factor": float(lane_factor), "cbr_mode": mode,
+        "cbr_series": cbr_series.copy(), "cbr_percentile": int(percentile) if mode == "Serie de ensayos" else 10,
+        "subgrade": {"cbr": float(cbr_design), "class": sclass, "mr": float(mr), **st.session_state.subgrade_details},
+    })
+    tomo_scenarios[scenario_slug] = scenario_state
+    st.session_state.tomo_scenarios = tomo_scenarios
     if measured_mr <= 0 and mr_source != "Estimado a partir del CBR":
         st.warning("Se indicó una fuente documentada de Mr, pero no se ingresó el valor. Se mantiene temporalmente la estimación por CBR.")
 
@@ -4289,6 +4328,23 @@ with pexport:
 
 with p6:
     st.subheader("Informe y exportación")
+    # Completa el escenario activo con resultados generados después de las
+    # entradas de tránsito y subrasante. El escenario del otro tomo se conserva.
+    tomo_scenarios = dict(st.session_state.get("tomo_scenarios", {}))
+    scenario_state = dict(tomo_scenarios.get(scenario_slug, {}))
+    scenario_state.update({
+        "tomo": active_tomo,
+        "selected_row": selected_row,
+        "total_thickness": float(total_thickness),
+        "exact_match": bool(exact_match),
+        "tomo2_result": st.session_state.get("tomo2_result", {}) if active_tomo == "Tomo II" else {},
+        "flex_design": st.session_state.get("flex_design", {}) if active_tomo == "Tomo I" else {},
+        "materials": st.session_state.get("design_materials", {}) if active_tomo == "Tomo I" else {},
+        "reliability": st.session_state.get("design_reliability", {}) if active_tomo == "Tomo I" else {},
+        "climate_material": st.session_state.get("climate_material", {}) if active_tomo == "Tomo I" else {},
+    })
+    tomo_scenarios[scenario_slug] = scenario_state
+    st.session_state.tomo_scenarios = tomo_scenarios
     payload = {
         "project": {
             "name": project_name,
@@ -4372,6 +4428,7 @@ with p6:
             "alerts": [m for _,m in climate_checks],
         },
         "active_tomo": active_tomo,
+        "scenarios": tomo_scenarios,
         "selected": selected_row,
         "gdp_tomo2": st.session_state.get("tomo2_result", {}) if active_tomo == "Tomo II" else {},
         "traceability": selected_trace(selected_row),
