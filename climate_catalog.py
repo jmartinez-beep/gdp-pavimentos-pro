@@ -29,21 +29,72 @@ CLIMATE_ZONES = {
 }
 
 
-def parse_power_climatology(payload: dict[str, Any], zone: str) -> dict[str, Any]:
+def project_climate_point(
+    project_map: dict[str, Any], segment: dict[str, Any]
+) -> tuple[float, float, str]:
+    """Return the WGS84 point used by climate queries for the active geometry."""
+    if project_map.get("geometry_mode") == "Tramo (inicio–fin)":
+        required = ("start_lat", "start_lon", "end_lat", "end_lon")
+        if all(key in segment for key in required):
+            return (
+                (float(segment["start_lat"]) + float(segment["end_lat"])) / 2.0,
+                (float(segment["start_lon"]) + float(segment["end_lon"])) / 2.0,
+                "Punto medio del tramo",
+            )
+    return (
+        float(project_map["latitude"]),
+        float(project_map["longitude"]),
+        "Punto único del proyecto",
+    )
+
+
+def parse_power_point_climatology(
+    payload: dict[str, Any], latitude: float, longitude: float, label: str
+) -> dict[str, Any]:
     parameter = payload.get("properties", {}).get("parameter", {}).get("T2M", {})
     monthly = [float(parameter[key]) for key in MONTH_KEYS]
     if len(monthly) != 12 or any(value <= -90 for value in monthly):
         raise ValueError("NASA POWER no devolvió una serie mensual válida.")
-    latitude, longitude = CLIMATE_ZONES[zone]
     return {
-        "zone": zone,
-        "latitude": latitude,
-        "longitude": longitude,
+        "zone": label,
+        "latitude": float(latitude),
+        "longitude": float(longitude),
         "monthly_c": monthly,
         "annual_c": sum(monthly) / len(monthly),
-        "source": "NASA POWER · MERRA-2 (T2M, punto de zona representativa)",
+        "source": "NASA POWER · MERRA-2 (T2M, coordenadas WGS84)",
         "period": "Climatología multianual definida por NASA POWER",
     }
+
+
+def parse_power_climatology(payload: dict[str, Any], zone: str) -> dict[str, Any]:
+    latitude, longitude = CLIMATE_ZONES[zone]
+    result = parse_power_point_climatology(payload, latitude, longitude, zone)
+    result["source"] = "NASA POWER · MERRA-2 (T2M, punto de zona representativa)"
+    return result
+
+
+@lru_cache(maxsize=64)
+def fetch_point_climatology(
+    latitude: float, longitude: float, label: str = "Coordenadas del proyecto", timeout: float = 12.0
+) -> dict[str, Any]:
+    latitude = round(float(latitude), 5)
+    longitude = round(float(longitude), 5)
+    if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+        raise ValueError("Coordenadas WGS84 inválidas para consultar NASA POWER.")
+    query = urlencode({
+        "parameters": "T2M",
+        "community": "AG",
+        "longitude": longitude,
+        "latitude": latitude,
+        "format": "JSON",
+    })
+    request = Request(
+        f"https://power.larc.nasa.gov/api/temporal/climatology/point?{query}",
+        headers={"User-Agent": "GDP-Pavimentos-Pro/1.1"},
+    )
+    with urlopen(request, timeout=timeout) as response:
+        payload = json.load(response)
+    return parse_power_point_climatology(payload, latitude, longitude, label)
 
 
 @lru_cache(maxsize=32)
