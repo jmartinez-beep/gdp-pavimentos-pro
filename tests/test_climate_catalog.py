@@ -41,6 +41,17 @@ def test_parse_power_point_climatology_preserves_project_coordinates():
     assert "coordenadas WGS84" in result["source"]
 
 
+def test_parse_power_point_climatology_converts_daily_rain_to_monthly():
+    keys = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+    payload = {"properties": {"parameter": {
+        "T2M": {key: 24.0 for key in keys},
+        "PRECTOTCORR": {key: 2.0 for key in keys},
+    }}}
+    result = parse_power_point_climatology(payload, 9.8, -84.1, "Proyecto")
+    assert result["monthly_precip_mm"][0] == 62.0
+    assert result["monthly_precip_mm"][1] == 56.0
+
+
 def test_project_climate_point_uses_segment_midpoint():
     point = project_climate_point(
         {"geometry_mode": "Tramo (inicio–fin)", "latitude": 9.0, "longitude": -84.0},

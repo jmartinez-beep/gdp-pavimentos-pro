@@ -17,7 +17,10 @@ from web_storage import (
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
 from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
-from climate_tools import MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature
+from climate_tools import (
+    MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature,
+    thornthwaite_tmi_balance,
+)
 from climate_catalog import (
     CLIMATE_ZONES, fetch_point_climatology, fetch_zone_climatology,
     project_climate_point,
@@ -391,9 +394,9 @@ def normative_evidence_table() -> pd.DataFrame:
             'Estado': 'Control fijo incorporado', 'Automático': 'Sí',
         },
         {
-            'Control': 'Clasificación climática A/B',
-            'Documento': 'GDP-2024 Tomo I', 'Referencia': 'Tabla/sección exacta pendiente de evidencia textual',
-            'Estado': 'No declarar conformidad normativa', 'Automático': 'No',
+            'Control': 'Clasificación climática por TMI',
+            'Documento': 'GDP-2024 Tomo I', 'Referencia': 'Sección 302, Tabla 302-01 y Anexo B',
+            'Estado': 'Cálculo documentado incorporado', 'Automático': 'Sí, con series mensuales',
         },
         {
             'Control': 'Rango de espesor de carpeta asfáltica',
@@ -429,13 +432,6 @@ def master_curve_dynamic_modulus_mpa(log10_reduced_frequency: float, delta: floa
     """Curva maestra sigmoidal configurable en log10(E*) con E* en MPa."""
     loge = float(delta) + float(alpha) / (1.0 + math.exp(float(beta) + float(gamma) * float(log10_reduced_frequency)))
     return 10.0 ** loge
-
-
-def climate_ab_from_threshold(pavement_temp_c: float, threshold_c: float, orientation: str) -> str:
-    """Clasificación A/B configurable; no se presenta como umbral GDP hasta documentar la tabla aplicable."""
-    if orientation == 'A ≤ umbral; B > umbral':
-        return 'A' if float(pavement_temp_c) <= float(threshold_c) else 'B'
-    return 'B' if float(pavement_temp_c) <= float(threshold_c) else 'A'
 
 
 # ADVANCED_DESIGN_CONTROLS_6_7_8_9_10_11_16_18_20
@@ -3072,17 +3068,41 @@ with pclima:
     st.write(f"**Modo:** {climate_input_mode} · **Fuente:** {climate_source or 'No indicada'} · **Periodo:** {climate_period or 'No indicado'} · **Estación/zona:** {station_selected}")
 
     if st.session_state.active_tomo == "Tomo I":
-        st.markdown("#### Clasificación climática A / B — control documental")
-        st.warning("El repositorio oficial confirma el GDP-2024 Tomo I, pero la tabla/regla A-B exacta no está incorporada como evidencia textual en esta versión. Por seguridad, GDP Pavimentos Pro **no calcula A/B desde un umbral inventado** ni usa A/B para declarar conformidad.")
-        cl1, cl2, cl3 = st.columns(3)
-        climate_ab = cl1.selectbox("Clase climática documentada", ["Sin definir", "A", "B"], key='climate_ab_documented')
-        climate_ab_source = cl2.text_input("Tabla / sección / informe que respalda A/B", value="", key='climate_ab_source')
-        climate_ab_verified = cl3.checkbox("He verificado la clasificación contra el documento aplicable", value=False, key='climate_ab_verified')
-        climate_ab_ready = climate_ab in ("A", "B") and bool(climate_ab_source.strip()) and bool(climate_ab_verified)
-        if climate_ab_ready:
-            st.success(f"Clima {climate_ab} registrado como dato documentado · fuente: {climate_ab_source}")
+        st.markdown("#### Índice de humedad de Thornthwaite (TMI)")
+        st.caption("GDP-2024 Tomo I · Sección 302, Tabla 302-01 y Anexo B. El balance utiliza Smax = 200 mm.")
+        tmi_temperatures = monthly_values if len(monthly_values) == 12 else catalog.get("monthly_c", [float(air_temp_c)] * 12)
+        tmi_precipitation = catalog.get("monthly_precip_mm", [0.0] * 12)
+        tmi_seed = pd.DataFrame({
+            "Mes": MONTHS_ES,
+            "Temperatura media (°C)": tmi_temperatures,
+            "Precipitación mensual (mm)": tmi_precipitation,
+        })
+        tmi_input = st.data_editor(
+            tmi_seed, use_container_width=True, hide_index=True, num_rows="fixed",
+            key=f"climate_tmi_editor_{station_selected}",
+            column_config={
+                "Mes": st.column_config.TextColumn("Mes", disabled=True),
+                "Temperatura media (°C)": st.column_config.NumberColumn(min_value=-20.0, max_value=60.0, step=0.1, format="%.1f"),
+                "Precipitación mensual (mm)": st.column_config.NumberColumn(min_value=0.0, step=1.0, format="%.1f"),
+            },
+        )
+        tmi_temps = pd.to_numeric(tmi_input["Temperatura media (°C)"], errors="coerce").fillna(0.0).tolist()
+        tmi_rain = pd.to_numeric(tmi_input["Precipitación mensual (mm)"], errors="coerce").fillna(0.0).tolist()
+        tmi_ready = len(tmi_rain) == 12 and sum(tmi_rain) > 0
+        if tmi_ready:
+            tmi_table, tmi_summary = thornthwaite_tmi_balance(tmi_temps, tmi_rain, latitude, 200.0)
+            tm1, tm2, tm3, tm4 = st.columns(4)
+            tm1.metric("TMI anual", f"{tmi_summary['annual_tmi']:.1f}")
+            tm2.metric("Clase climática", tmi_summary["climate_class"])
+            tm3.metric("Precipitación anual", f"{tmi_summary['annual_precipitation_mm']:.0f} mm")
+            tm4.metric("ETP anual", f"{tmi_summary['annual_pet_mm']:.0f} mm")
+            with st.expander("Ver balance hídrico mensual TMI", expanded=False):
+                st.dataframe(tmi_table, use_container_width=True, hide_index=True)
+            st.success("Clasificación calculada con la metodología TMI incorporada en el GDP-2024 Tomo I.")
         else:
-            st.info("Clasificación A/B no habilitada como criterio de decisión. Complete clase, referencia y verificación documental.")
+            tmi_table = pd.DataFrame()
+            tmi_summary = {}
+            st.info("Ingrese las 12 precipitaciones mensuales para calcular el TMI. NASA POWER las completa automáticamente cuando están disponibles.")
 
         st.markdown("#### Curva maestra y ecuación de desplazamiento de la mezcla asfáltica en caliente")
         st.caption("Modelo sigmoidal + desplazamiento WLF configurable. Los coeficientes deben provenir de ensayos/ajuste documentado; no se presentan como coeficientes universales GDP.")
@@ -3135,8 +3155,9 @@ with pclima:
         climate_material_factor = float(e_monthly['E* calculado (MPa)'].mean()) / max(e_ref_state, 1e-9)
         st.session_state.monthly_dynamic_modulus_input = e_monthly.copy()
         st.session_state.climate_material = {
-            'climate_class_ab': climate_ab if climate_ab_ready else 'Sin definir', 'climate_ab_source': climate_ab_source,
-            'climate_ab_verified': bool(climate_ab_verified), 'climate_ab_normative_ready': bool(climate_ab_ready),
+            'tmi_ready': bool(tmi_ready), 'tmi_summary': tmi_summary,
+            'tmi_monthly_balance': tmi_table.to_dict(orient='records') if not tmi_table.empty else [],
+            'tmi_reference': 'GDP-2024 Tomo I, Sección 302, Tabla 302-01 y Anexo B',
             'monthly_modulus': e_monthly.to_dict(orient='records'), 'reference_modulus_mpa': e_ref_state,
             'effective_modulus_mpa': float(e_effective), 'relative_climate_factor': float(climate_material_factor),
             'shift_model': 'WLF configurable', 'master_curve_model': 'Sigmoidal configurable',

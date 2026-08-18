@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 
 MONTH_KEYS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 # Coordenadas urbanas representativas. No deben interpretarse como estaciones IMN.
 CLIMATE_ZONES = {
@@ -55,7 +56,7 @@ def parse_power_point_climatology(
     monthly = [float(parameter[key]) for key in MONTH_KEYS]
     if len(monthly) != 12 or any(value <= -90 for value in monthly):
         raise ValueError("NASA POWER no devolvió una serie mensual válida.")
-    return {
+    result = {
         "zone": label,
         "latitude": float(latitude),
         "longitude": float(longitude),
@@ -64,6 +65,15 @@ def parse_power_point_climatology(
         "source": "NASA POWER · MERRA-2 (T2M, coordenadas WGS84)",
         "period": "Climatología multianual definida por NASA POWER",
     }
+    precipitation = payload.get("properties", {}).get("parameter", {}).get("PRECTOTCORR", {})
+    if all(key in precipitation for key in MONTH_KEYS):
+        # POWER expresa PRECTOTCORR como promedio diario (mm/día) para cada mes
+        # climatológico; se convierte a lámina mensual para el balance GDP.
+        result["monthly_precip_mm"] = [
+            max(float(precipitation[key]), 0.0) * days
+            for key, days in zip(MONTH_KEYS, MONTH_DAYS)
+        ]
+    return result
 
 
 def parse_power_climatology(payload: dict[str, Any], zone: str) -> dict[str, Any]:
@@ -82,7 +92,7 @@ def fetch_point_climatology(
     if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
         raise ValueError("Coordenadas WGS84 inválidas para consultar NASA POWER.")
     query = urlencode({
-        "parameters": "T2M",
+        "parameters": "T2M,PRECTOTCORR",
         "community": "AG",
         "longitude": longitude,
         "latitude": latitude,
@@ -103,7 +113,7 @@ def fetch_zone_climatology(zone: str, timeout: float = 12.0) -> dict[str, Any]:
         raise ValueError(f"Zona climática desconocida: {zone}")
     latitude, longitude = CLIMATE_ZONES[zone]
     query = urlencode({
-        "parameters": "T2M",
+        "parameters": "T2M,PRECTOTCORR",
         "community": "AG",
         "longitude": longitude,
         "latitude": latitude,
