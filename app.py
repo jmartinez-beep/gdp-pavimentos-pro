@@ -2620,6 +2620,7 @@ with p1:
         "Puente": "square", "Alcantarilla": "square", "Intersección": "circle",
         "Acceso": "circle", "Otro": "circle",
     }
+    project_map_green = "#00E676"
     if valid_geo_points:
         for ptype in sorted({p["type"] for p in valid_geo_points}):
             pts = [p for p in valid_geo_points if p["type"] == ptype]
@@ -2630,7 +2631,11 @@ with p1:
                 text=[p["name"] for p in pts],
                 textposition="top right",
                 name=ptype,
-                marker=dict(size=13, symbol=type_symbols.get(ptype, "circle")),
+                marker=dict(
+                    size=15 if ptype == "Proyecto" else 13,
+                    symbol=type_symbols.get(ptype, "circle"),
+                    color=project_map_green if ptype == "Proyecto" else None,
+                ),
                 customdata=[[p["crtm_easting"], p["crtm_northing"], p["description"]] for p in pts],
                 hovertemplate="<b>%{text}</b><br>Este: %{customdata[0]:,.3f} m<br>Norte: %{customdata[1]:,.3f} m<br>Lat: %{lat:.7f}<br>Lon: %{lon:.7f}<br>%{customdata[2]}<extra></extra>",
             ))
@@ -2643,7 +2648,8 @@ with p1:
         fig_project_map.add_trace(go.Scattermapbox(
             lat=[point[1] for point in line_coords],
             lon=[point[0] for point in line_coords],
-            mode="lines", name=main_project_line[0]["name"], line=dict(width=6, color="#ff7f9b"),
+            mode="lines", name=main_project_line[0]["name"],
+            line=dict(width=7, color=project_map_green),
             hovertemplate=f"<b>{main_project_line[0]['name']}</b><extra></extra>",
         ))
         center_lat = sum(point[1] for point in line_coords) / len(line_coords)
