@@ -114,4 +114,10 @@ def test_scenario_payload_with_dataframes_is_json_serializable():
     decoded = json.loads(encoded)
 
     assert decoded["scenarios"]["tomo1"]["vehicles"]["__type__"] == "dataframe"
-    assert decoded["scenarios"]["tomo1"]["cbr_values"]["records"][0]["Fecha"] == "2026-08-18T00:00:00"
+    encoded_date = decoded["scenarios"]["tomo1"]["cbr_values"]["records"][0]["Fecha"]
+    assert encoded_date["__type__"] == "datetime"
+    assert encoded_date["value"] == "2026-08-18T00:00:00"
+
+    restored = web_storage.deserialize_value(decoded)
+    assert restored["scenarios"]["tomo1"]["vehicles"].iloc[0]["TPD"] == 152.5
+    assert restored["scenarios"]["tomo1"]["cbr_values"].iloc[0]["CBR"] == 7.2
