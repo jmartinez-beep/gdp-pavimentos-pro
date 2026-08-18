@@ -3016,6 +3016,16 @@ with pclima:
 
     c1, c2, c3 = st.columns(3)
     with c1:
+        preferred_climate_source = st.selectbox(
+            "Fuente principal del expediente",
+            [
+                "NASA POWER — referencia automática",
+                "IMN — estación oficial",
+                "Estudio específico del proyecto",
+            ],
+            key="climate_preferred_source",
+            help="NASA POWER puede utilizarse como fuente preliminar o como contraste de una fuente local documentada.",
+        )
         station_selected = st.selectbox(
             "Estación o zona representativa",
             [PROJECT_CLIMATE_OPTION] + CLIMATE_STATIONS_TOMO_II + ["Otra / dato propio"],
@@ -3064,6 +3074,25 @@ with pclima:
             f"Climatología cargada automáticamente para {station_selected}: "
             f"{catalog['latitude']:.5f}, {catalog['longitude']:.5f} "
             f"({catalog.get('geometry_label', 'punto consultado')})."
+        )
+        st.info(
+            "NASA POWER representa una celda climática modelada, no una estación ubicada exactamente "
+            "en el proyecto. Para diseño definitivo, priorice una estación IMN o un estudio local "
+            "representativo cuando estén disponibles."
+        )
+        st.caption(
+            f"Producto: {catalog.get('product', 'NASA POWER')} · "
+            f"Variables: {', '.join(catalog.get('parameters', [])) or 'T2M, PRECTOTCORR'} · "
+            f"Resolución: {catalog.get('spatial_resolution', 'resolución nativa del producto')} · "
+            f"Consulta UTC: {catalog.get('retrieved_at_utc', 'no registrada')}"
+        )
+
+    local_source_selected = preferred_climate_source != "NASA POWER — referencia automática"
+    if local_source_selected and station_selected != "Otra / dato propio":
+        st.warning(
+            "La fuente principal seleccionada es local, pero los valores visibles proceden del catálogo "
+            "NASA POWER. Úselos solo como comparación o seleccione “Otra / dato propio” para ingresar "
+            "los datos documentados del IMN o del estudio."
         )
 
     if climate_input_mode == "Valores mensuales":
@@ -3121,6 +3150,23 @@ with pclima:
     tp_ltpp = pavement_temperature_ltpp(air_temp_c, latitude, depth_mm)
     tp_shrp = pavement_temperature_shrp(air_temp_c, latitude, depth_mm)
     pavement_temp_c = tp_ltpp
+    st.session_state.climate_traceability = {
+        "preferred_source": preferred_climate_source,
+        "input_mode": climate_input_mode,
+        "station_or_zone": station_selected,
+        "documented_source": climate_source,
+        "documented_period": climate_period,
+        "query_latitude": catalog.get("latitude") if catalog_matches_zone else None,
+        "query_longitude": catalog.get("longitude") if catalog_matches_zone else None,
+        "geometry_reference": catalog.get("geometry_label") if catalog_matches_zone else None,
+        "product": catalog.get("product") if catalog_matches_zone else None,
+        "parameters": catalog.get("parameters", []) if catalog_matches_zone else [],
+        "spatial_resolution": catalog.get("spatial_resolution") if catalog_matches_zone else None,
+        "retrieved_at_utc": catalog.get("retrieved_at_utc") if catalog_matches_zone else None,
+        "data_type": catalog.get("data_type") if catalog_matches_zone else "Dato documentado por el usuario",
+        "disclaimer": catalog.get("disclaimer") if catalog_matches_zone else None,
+        "reference_url": catalog.get("reference_url") if catalog_matches_zone else None,
+    }
     a1,a2,a3,a4=st.columns(4)
     a1.metric("Temperatura representativa del aire", f"{air_temp_c:.1f} °C")
     a2.metric("Pavimento — LTPP", f"{tp_ltpp:.1f} °C")
@@ -4366,6 +4412,7 @@ with p6:
         "materials": st.session_state.get("design_materials", {}) if active_tomo == "Tomo I" else {},
         "reliability": st.session_state.get("design_reliability", {}) if active_tomo == "Tomo I" else {},
         "climate_material": st.session_state.get("climate_material", {}) if active_tomo == "Tomo I" else {},
+        "climate_traceability": st.session_state.get("climate_traceability", {}),
     })
     tomo_scenarios[scenario_slug] = scenario_state
     st.session_state.tomo_scenarios = tomo_scenarios
@@ -4430,6 +4477,7 @@ with p6:
         "mechanistic_screening": st.session_state.get("mechanistic_screening", {}) if active_tomo == "Tomo I" else {},
         "transfer_model": st.session_state.get("transfer_model", {}) if active_tomo == "Tomo I" else {},
         "climate_material": st.session_state.get("climate_material", {}) if active_tomo == "Tomo I" else {},
+        "climate_traceability": st.session_state.get("climate_traceability", {}),
         "homogeneous_segments": st.session_state.get("homogeneous_segments", []),
         "rehabilitation": st.session_state.get("rehabilitation", {}),
         "optimization_candidates": st.session_state.get("optimization_candidates", pd.DataFrame()).to_dict(orient="records") if isinstance(st.session_state.get("optimization_candidates", pd.DataFrame()), pd.DataFrame) else [],

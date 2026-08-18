@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode
@@ -64,6 +65,15 @@ def parse_power_point_climatology(
         "annual_c": sum(monthly) / len(monthly),
         "source": "NASA POWER · MERRA-2 (T2M, coordenadas WGS84)",
         "period": "Climatología multianual definida por NASA POWER",
+        "parameters": ["T2M", "PRECTOTCORR"],
+        "product": "NASA POWER · MERRA-2/GEOS-IT",
+        "data_type": "Reanálisis/modelo global; no es una medición en el sitio",
+        "spatial_resolution": "0.5° latitud × 0.625° longitud (celda meteorológica)",
+        "reference_url": "https://power.larc.nasa.gov/",
+        "disclaimer": (
+            "Dato modelado para la celda climática que contiene las coordenadas; "
+            "no corresponde a una estación instalada en el proyecto."
+        ),
     }
     precipitation = payload.get("properties", {}).get("parameter", {}).get("PRECTOTCORR", {})
     if all(key in precipitation for key in MONTH_KEYS):
@@ -104,7 +114,9 @@ def fetch_point_climatology(
     )
     with urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
-    return parse_power_point_climatology(payload, latitude, longitude, label)
+    result = parse_power_point_climatology(payload, latitude, longitude, label)
+    result["retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
+    return result
 
 
 @lru_cache(maxsize=32)
@@ -125,4 +137,6 @@ def fetch_zone_climatology(zone: str, timeout: float = 12.0) -> dict[str, Any]:
     )
     with urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
-    return parse_power_climatology(payload, zone)
+    result = parse_power_climatology(payload, zone)
+    result["retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
+    return result
