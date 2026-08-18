@@ -3,6 +3,7 @@ from gdp_tomo2 import (
     classify_heavy_pct,
     classify_tpd,
     nearby_catalog_options,
+    representative_cbr_for_mr,
     select_structures,
 )
 
@@ -22,6 +23,12 @@ def test_scope_boundaries():
     assert classify_heavy_pct(3.0) == "3"
     assert classify_heavy_pct(15.0) == "15"
     assert classify_heavy_pct(15.01) is None
+
+
+def test_representative_cbr_for_mr_uses_tomo2_category():
+    assert representative_cbr_for_mr(6.5) == 6.0
+    assert representative_cbr_for_mr(8.99) == 6.0
+    assert representative_cbr_for_mr(2.99) is None
 
 
 def test_out_of_scope_does_not_emit_structure():

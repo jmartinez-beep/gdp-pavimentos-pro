@@ -15,7 +15,7 @@ from web_storage import (
     project_state_fingerprint, save_project, serialize_value,
 )
 from gdp_tomo2_adapter import alternatives_for_app, selected_trace
-from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options
+from gdp_tomo2 import classify_tpd, classify_cbr, classify_heavy_pct, nearby_catalog_options, representative_cbr_for_mr
 from geo_cr import crtm05_to_wgs84, wgs84_to_crtm05, is_plausible_costa_rica_wgs84
 from climate_tools import (
     MONTHS_ES, monthly_climate_table, monthly_summary, representative_temperature,
@@ -2898,16 +2898,26 @@ with p3:
         cbr_design = float(valid.quantile(percentile / 100.0)) if not valid.empty else 0.0
 
     sclass = subgrade_class(cbr_design)
-    mr_estimated = resilient_modulus(cbr_design)
+    tomo2_cbr_category = None
+    cbr_used_for_mr = float(cbr_design)
     if st.session_state.active_tomo == "Tomo II":
         tomo2_cbr_category = classify_cbr(cbr_design)
+        representative_cbr = representative_cbr_for_mr(cbr_design)
+        if representative_cbr is not None:
+            cbr_used_for_mr = representative_cbr
         sgc1, sgc2 = st.columns(2)
         sgc1.metric("Categoría normativa CBR — Tomo II", f"CBR {tomo2_cbr_category}%" if tomo2_cbr_category is not None else "Fuera de alcance")
         sgc2.metric("Clase geotécnica auxiliar", sclass, help="S1–S4 se conserva para visualización y análisis interno; no sustituye la categoría CBR del catálogo Tomo II.")
         if tomo2_cbr_category is None:
             st.error("Tomo II: CBR < 3% queda fuera del alcance directo del catálogo.")
         else:
-            st.info("Para la selección Tomo II se utiliza la categoría CBR 3/4/6/9/11 del motor normativo. S1–S4 es una clasificación auxiliar de la aplicación.")
+            st.info(
+                "Para Tomo II, el CBR medido se conserva como dato del sitio y se categoriza a "
+                "CBR 3/4/6/9/11. El valor de la categoría se utiliza para estimar el Mr; "
+                "S1–S4 queda únicamente como clasificación auxiliar."
+            )
+
+    mr_estimated = resilient_modulus(cbr_used_for_mr)
 
     st.markdown("#### Caracterización geotécnica complementaria")
     sg1, sg2, sg3, sg4 = st.columns(4)
@@ -2926,16 +2936,25 @@ with p3:
     mr = float(measured_mr) if measured_mr > 0 and mr_source != "Estimado a partir del CBR" else float(mr_estimated)
 
     x1, x2, x3, x4 = st.columns(4)
-    x1.metric("CBR de diseño", f"{cbr_design:.2f}%")
-    x2.metric("Rango de subrasante", sclass)
-    x3.metric("Mr estimado por CBR", f"{mr_estimated:.2f} MPa")
+    x1.metric("CBR medido / de diseño", f"{cbr_design:.2f}%")
+    if active_tomo == "Tomo II":
+        x2.metric(
+            "CBR categorizado usado para Mr",
+            f"{cbr_used_for_mr:.0f}%" if tomo2_cbr_category is not None else "Fuera de alcance",
+        )
+        x3.metric("Mr estimado con CBR categorizado", f"{mr_estimated:.2f} MPa")
+    else:
+        x2.metric("Rango de subrasante", sclass)
+        x3.metric("Mr estimado por CBR", f"{mr_estimated:.2f} MPa")
     x4.metric("Mr usado en diseño", f"{mr:.2f} MPa")
     st.session_state.subgrade_details = {
         "sucs": soil_sucs, "aashto": soil_aashto, "liquid_limit_pct": float(liquid_limit),
         "plasticity_index_pct": float(plasticity_index), "natural_moisture_pct": float(natural_moisture),
         "max_dry_density_kg_m3": float(max_dry_density), "water_table_m": float(subgrade_water_table),
         "mr_estimated_mpa": float(mr_estimated), "mr_design_mpa": float(mr), "mr_source": mr_source,
-        "measured_mr_mpa": float(measured_mr),
+        "measured_mr_mpa": float(measured_mr), "cbr_measured_pct": float(cbr_design),
+        "cbr_category_pct": float(tomo2_cbr_category) if tomo2_cbr_category is not None else None,
+        "cbr_used_for_mr_pct": float(cbr_used_for_mr),
     }
     # Cada metodología mantiene su propio escenario dentro del mismo proyecto.
     tomo_scenarios = dict(st.session_state.get("tomo_scenarios", {}))
