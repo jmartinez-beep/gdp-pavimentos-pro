@@ -59,3 +59,19 @@ def material_description(name: str) -> str:
         "improved_subgrade": "Suelo mejorado de textura fina",
         "subgrade": "Suelo natural fino y estratificado",
     }[material_kind(name)]
+
+
+def aggregate_particle_style(name: str) -> dict[str, object]:
+    """Visual hierarchy for aggregate exposed on the schematic cut faces."""
+    kind = material_kind(name)
+    styles = {
+        "asphalt": dict(count_factor=1.20, size=(0.40, 1.15), opacity=0.38, symbol="circle"),
+        "stabilized_base": dict(count_factor=0.35, size=(0.25, 0.75), opacity=0.22, symbol="circle"),
+        # Base: crushed aggregate is dense and comparatively fine.
+        "granular_base": dict(count_factor=1.25, size=(0.75, 2.45), opacity=0.72, symbol="diamond"),
+        # Subbase: particles are visibly coarser and more open than in the base.
+        "granular_subbase": dict(count_factor=1.05, size=(1.10, 3.20), opacity=0.76, symbol="diamond"),
+        "improved_subgrade": dict(count_factor=0.72, size=(0.30, 0.95), opacity=0.27, symbol="circle"),
+        "subgrade": dict(count_factor=0.72, size=(0.30, 0.95), opacity=0.27, symbol="circle"),
+    }
+    return styles[kind]

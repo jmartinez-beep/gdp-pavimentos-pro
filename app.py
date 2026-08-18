@@ -35,7 +35,7 @@ from project_state import (
     tomo1_structure_identifier,
 )
 from construction_costs import cost_summary, quantity_rows
-from material_appearance import material_description, material_style
+from material_appearance import aggregate_particle_style, material_description, material_style
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -1024,20 +1024,23 @@ def _aggregate_particles(x0: float, x1: float, y0: float, y1: float, z0: float, 
     n=name.lower(); quality=st.session_state.get("render_quality","Alta")
     base_counts={"Media":90,"Alta":190,"Ultra":380}; count=base_counts.get(quality,180)
     traces=[]
+    particle_style = aggregate_particle_style(name)
+    count=int(count*float(particle_style["count_factor"])); size=particle_style["size"]
+    opacity=float(particle_style["opacity"]); symbol=str(particle_style["symbol"])
     if "asf" in n or "tratamiento" in n or "superficie" in n:
-        count=int(count*1.20); size=(.40,1.15); seed=111; opacity=.38
+        seed=111
         colors=[[0,"#202121"],[.30,"#484a49"],[.58,"#747570"],[.82,"#aaa89f"],[1,"#e2ded3"]]; symbol='circle'
     elif "base estabilizada" in n or "suelo cemento" in n:
-        count=int(count*.35); size=(.25,.75); seed=229; opacity=.22
+        seed=229
         colors=[[0,"#5c5d59"],[.45,"#85867f"],[.75,"#a5a59b"],[1,"#c2c1b5"]]; symbol='circle'
     elif "subbase" in n:
-        count=int(count*.78); size=(.60,1.95); seed=337; opacity=.50
-        colors=[[0,"#5b5046"],[.28,"#786b5d"],[.56,"#978777"],[.82,"#b8aa98"],[1,"#ddd4c5"]]; symbol='diamond'
+        seed=337
+        colors=[[0,"#41484a"],[.24,"#667073"],[.52,"#8d999b"],[.78,"#bac3c2"],[1,"#e3e7e1"]]; symbol='diamond'
     elif "base granular" in n:
-        count=int(count*.90); size=(.55,1.80); seed=223; opacity=.52
+        seed=223
         colors=[[0,"#414346"],[.28,"#666a6e"],[.56,"#8b9195"],[.82,"#bec3c4"],[1,"#eceeea"]]; symbol='diamond'
     else:
-        count=int(count*.82); size=(.30,1.00); seed=451; opacity=.28
+        seed=451
         colors=[[0,"#3c281a"],[.40,"#654830"],[.70,"#937054"],[1,"#c3a586"]]; symbol='circle'
 
     rng=np.random.default_rng(seed+int(z0*7)+int(z1*11))
@@ -1214,12 +1217,6 @@ def pavement_3d_figure(
         text=f"<span style='color:#9fb5c5'>Subrasante: CBR {cbr:.2f}%</span>",
         showarrow=False, xanchor="left", align="left", font=dict(size=10, color="#9fb5c5"),
     ))
-    label_annotations.append(dict(
-        x=.825, y=.025, xref="paper", yref="paper",
-        text="<span style='color:#7f94a3'>Texturas esquemáticas; no representan granulometría ni procedencia real.</span>",
-        showarrow=False, xanchor="left", align="left", font=dict(size=9, color="#7f94a3"),
-    ))
-
     fig = go.Figure(data=traces)
     fig.update_layout(
         height=690, paper_bgcolor="#06121d", plot_bgcolor="#06121d",
