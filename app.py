@@ -34,6 +34,7 @@ from project_state import (
     update_segment_coordinate_snapshot,
     tomo1_structure_identifier,
 )
+from construction_costs import cost_summary, quantity_rows
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -4228,7 +4229,11 @@ with pcompare:
             st.info("Ejecute primero la respuesta mecanística en Diseño flexible para habilitar escenarios.")
 
 with p5:
-    st.subheader("Costos de construcción y cantidades de obra")
+    st.subheader("Estimación conceptual de costos y cantidades de obra")
+    st.info(
+        "El resultado incluye cantidades preliminares de obra, no constituye un presupuesto contractual. "
+        "Sustituya los precios de referencia por cotizaciones o precios institucionales vigentes para la zona del proyecto."
+    )
     q1, q2, q3 = st.columns(3)
     with q1:
         length_m = st.number_input("Longitud (m)", min_value=1.0, value=float(project_length_m), step=10.0)
@@ -4239,28 +4244,91 @@ with p5:
         st.metric("Área", f"{area_m2:,.2f} m²")
 
     if selected_row:
-        price_surface = st.number_input("Precio carpeta/superficie (₡/m³)", min_value=0.0, value=95000.0, step=5000.0)
-        price_base = st.number_input("Precio base (₡/m³)", min_value=0.0, value=28000.0, step=1000.0)
-        price_subbase = st.number_input("Precio subbase (₡/m³)", min_value=0.0, value=22000.0, step=1000.0)
-        indirect_pct = st.number_input("Indirectos e imprevistos (%)", min_value=0.0, max_value=100.0, value=15.0, step=1.0)
+        st.markdown("#### Base de precios")
+        b1, b2, b3 = st.columns(3)
+        price_date = b1.date_input("Fecha de los precios", value=date.today(), key="cost_price_date")
+        price_source = b2.text_input("Fuente / cotización", value="Referencia preliminar editable", key="cost_price_source")
+        price_zone = b3.text_input("Zona y distancia de acarreo", value=str(location), key="cost_price_zone")
+        st.caption("Los precios siguientes deben representar suministro, transporte, colocación, equipo y mano de obra, salvo que se indique otra cosa.")
 
-        vol_surface = area_m2 * selected_row["Carpeta_cm"] / 100.0
-        vol_base = area_m2 * selected_row["Base_cm"] / 100.0
-        vol_subbase = area_m2 * selected_row["Subbase_cm"] / 100.0
-        direct = vol_surface * price_surface + vol_base * price_base + vol_subbase * price_subbase
-        total_cost = direct * (1 + indirect_pct / 100.0)
+        with st.expander("Precios unitarios colocados en obra", expanded=True):
+            u1, u2, u3 = st.columns(3)
+            price_site = u1.number_input("Preparación y replanteo (₡/m²)", 0.0, value=3500.0, step=500.0, key="cost_price_site")
+            price_earth = u2.number_input("Movimiento de tierras y acarreo (₡/m³)", 0.0, value=15000.0, step=1000.0, key="cost_price_earth")
+            price_surface = u3.number_input("Carpeta asfáltica colocada (₡/m³)", 0.0, value=140000.0, step=5000.0, key="cost_price_asphalt")
+            u4, u5, u6 = st.columns(3)
+            price_bg = u4.number_input("Base granular colocada (₡/m³)", 0.0, value=35000.0, step=1000.0, key="cost_price_bg")
+            price_be = u5.number_input("Base estabilizada colocada (₡/m³)", 0.0, value=70000.0, step=2500.0, key="cost_price_be")
+            price_sb = u6.number_input("Subbase granular colocada (₡/m³)", 0.0, value=30000.0, step=1000.0, key="cost_price_sb")
+            u7, u8, u9 = st.columns(3)
+            price_prime = u7.number_input("Imprimación y riego de liga (₡/m²)", 0.0, value=1800.0, step=100.0, key="cost_price_prime")
+            price_drain = u8.number_input("Drenaje longitudinal/menor (₡/m)", 0.0, value=30000.0, step=2500.0, key="cost_price_drain")
+            price_mark = u9.number_input("Demarcación y señalización básica (₡/m)", 0.0, value=2500.0, step=250.0, key="cost_price_mark")
+
+        with st.expander("Cantidades complementarias y factores del proyecto", expanded=True):
+            c1, c2, c3 = st.columns(3)
+            earthwork_depth = c1.number_input("Profundidad media de movimiento de tierras (m)", 0.0, value=0.20, step=0.05, key="cost_earth_depth")
+            drainage_length = c2.number_input("Longitud de drenaje considerada (m)", 0.0, value=float(length_m * 2), step=10.0, key="cost_drain_length")
+            marking_length = c3.number_input("Longitud equivalente de demarcación (m)", 0.0, value=float(length_m), step=10.0, key="cost_mark_length")
+            f1, f2, f3 = st.columns(3)
+            prelim_pct = f1.number_input("Obras provisionales y manejo de tránsito (%)", 0.0, 100.0, 5.0, 1.0, key="cost_prelim_pct")
+            quality_pct = f2.number_input("Control de calidad (%)", 0.0, 100.0, 2.0, 0.5, key="cost_quality_pct")
+            overhead_pct = f3.number_input("Administración y utilidad (%)", 0.0, 100.0, 12.0, 1.0, key="cost_overhead_pct")
+            f4, f5, f6, f7 = st.columns(4)
+            contingency_pct = f4.number_input("Contingencia (%)", 0.0, 100.0, 10.0, 1.0, key="cost_contingency_pct")
+            escalation_pct = f5.number_input("Escalamiento a fecha de obra (%)", 0.0, 100.0, 0.0, 1.0, key="cost_escalation_pct")
+            tax_pct = f6.number_input("Impuestos aplicables (%)", 0.0, 100.0, 0.0, 1.0, key="cost_tax_pct")
+            uncertainty_pct = f7.number_input("Incertidumbre conceptual (±%)", 0.0, 100.0, 20.0, 5.0, key="cost_uncertainty_pct")
+
+        unit_prices = {
+            "site_preparation": price_site, "earthworks": price_earth,
+            "asphalt": price_surface, "granular_base": price_bg,
+            "stabilized_base": price_be, "granular_subbase": price_sb,
+            "prime_tack": price_prime, "drainage": price_drain, "marking": price_mark,
+        }
+        cost_rows = quantity_rows(
+            length_m=length_m, width_m=width_m, selected=selected_row,
+            earthwork_depth_m=earthwork_depth, drainage_length_m=drainage_length,
+            marking_length_m=marking_length, unit_prices=unit_prices,
+        )
+        cost_result = cost_summary(
+            cost_rows, preliminaries_pct=prelim_pct, quality_pct=quality_pct,
+            overhead_profit_pct=overhead_pct, contingency_pct=contingency_pct,
+            escalation_pct=escalation_pct, tax_pct=tax_pct,
+            uncertainty_pct=uncertainty_pct,
+        )
+        direct = cost_result["basic_direct"]
+        total_cost = cost_result["total"]
         per_m2 = total_cost / area_m2 if area_m2 else 0.0
+        per_linear_m = total_cost / length_m if length_m else 0.0
 
-        cost_table = pd.DataFrame([
-            ["Carpeta/superficie", vol_surface, price_surface, vol_surface * price_surface],
-            ["Base", vol_base, price_base, vol_base * price_base],
-            ["Subbase", vol_subbase, price_subbase, vol_subbase * price_subbase],
-        ], columns=["Capa", "Volumen_m3", "Precio_unitario", "Subtotal"])
-        st.dataframe(cost_table.style.format({"Volumen_m3":"{:,.2f}", "Precio_unitario":"₡{:,.0f}", "Subtotal":"₡{:,.0f}"}), use_container_width=True, hide_index=True)
-        z1, z2, z3 = st.columns(3)
-        z1.metric("Costo directo", money(direct))
-        z2.metric("Costo total", money(total_cost))
+        cost_table = pd.DataFrame(cost_rows)
+        st.markdown("#### Presupuesto conceptual por cantidades")
+        st.dataframe(cost_table.style.format({"Cantidad":"{:,.2f}", "Precio unitario":"₡{:,.0f}", "Subtotal":"₡{:,.0f}"}), use_container_width=True, hide_index=True)
+        adjustment_table = pd.DataFrame([
+            ["Costo directo de rubros", cost_result["basic_direct"]],
+            ["Provisionales, tránsito y calidad", cost_result["preliminaries_quality"]],
+            ["Administración y utilidad", cost_result["overhead_profit"]],
+            ["Contingencia", cost_result["contingency"]],
+            ["Escalamiento", cost_result["escalation"]],
+            ["Impuestos", cost_result["tax"]],
+        ], columns=["Componente", "Monto"])
+        st.dataframe(adjustment_table.style.format({"Monto":"₡{:,.0f}"}), use_container_width=True, hide_index=True)
+        z1, z2, z3, z4 = st.columns(4)
+        z1.metric("Costo directo ampliado", money(direct))
+        z2.metric("Estimación probable", money(total_cost))
         z3.metric("Costo por m²", money(per_m2))
+        z4.metric("Costo por metro lineal", money(per_linear_m))
+        st.warning(
+            f"Rango conceptual: **{money(cost_result['low'])} a {money(cost_result['high'])}**. "
+            "El rango refleja incertidumbre de definición, no una cotización ni una garantía de precio."
+        )
+        st.caption(f"Base de precios: {price_source or 'No indicada'} · Fecha: {price_date} · Zona/acarreo: {price_zone or 'No indicado'}.")
+        st.session_state.cost_estimate = {
+            "price_date": str(price_date), "price_source": price_source,
+            "price_zone": price_zone, "rows": cost_rows, "summary": cost_result,
+            "length_m": float(length_m), "width_m": float(width_m),
+        }
     else:
         total_cost = 0.0
         per_m2 = 0.0
